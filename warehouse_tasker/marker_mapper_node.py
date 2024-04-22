@@ -40,8 +40,10 @@ class MarkerStatic(Node):
 
 def main():
     rclpy.init()
+    
 
     node = MarkerStatic()
+    
     while rclpy.ok():
         node.transfer_transforms()
         rclpy.spin_once(node, timeout_sec=0.1)
