@@ -5,6 +5,17 @@ from setuptools import find_packages, setup
 
 package_name = 'warehouse_tasker'
 
+# Iterate through all the files and subdirectories
+# to build the data files array
+def generate_data_files(share_path, dir):
+    data_files = []
+    
+    for path, _, files in os.walk(dir):
+        list_entry = (share_path + path, [os.path.join(path, f) for f in files if not f.startswith('.')])
+        data_files.append(list_entry)
+
+    return data_files
+
 setup(
     name=package_name,
     version='0.0.0',
@@ -14,7 +25,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'worlds'), glob('worlds/*.world'))
-    ],
+    ] + generate_data_files('share/' + package_name + '/', 'models'),
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Johnson Ly',
