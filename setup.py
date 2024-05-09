@@ -23,12 +23,9 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        # (os.path.join('share', package_name), glob('launch/*.launch.py')),
-        (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz')),
-        (os.path.join('share', package_name, 'worlds'), glob('worlds/*.world')),
-        (os.path.join('share', package_name, 'params'), glob('params/*.yaml'))
-    ] + generate_data_files('share/' + package_name + '/', 'models')
-    + generate_data_files('share/' + package_name + '/', 'launch'),
+        (os.path.join('share', package_name), glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'worlds'), glob('worlds/*.world'))
+    ] + generate_data_files('share/' + package_name + '/', 'models'),
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Johnson Ly',
