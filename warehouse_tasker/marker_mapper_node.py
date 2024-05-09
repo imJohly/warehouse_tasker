@@ -36,7 +36,6 @@ class MarkerStatic(Node):
             self.get_logger().warn(f"Error transferring transform: {e}")
 
         rclpy.spin_once(self)
- 
 
 def main():
     rclpy.init()
