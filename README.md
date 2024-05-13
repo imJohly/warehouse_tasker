@@ -17,7 +17,7 @@ Then build it using colcon and source it from the install directory,
 
 ```
 cd ..
-colcon build --packages-select warehouse_tasker
+colcon build --packages-select warehouse_tasker --symlink-install
 source install/local_setup.bash
 ```
 
@@ -29,4 +29,10 @@ To launch the test environment,
 
 ```
 ros2 launch warehouse_tasker world.launch.py
+```
+
+For multi robots,
+
+```
+ros2 launch warehouse_tasker world_triple_robot.launch.py
 ```

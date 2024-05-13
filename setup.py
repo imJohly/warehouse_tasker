@@ -26,6 +26,7 @@ setup(
         (os.path.join('share', package_name), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'worlds'), glob('worlds/*.world')),
         (os.path.join('share', package_name, 'map'), glob('map/*')),
+        (os.path.join('share', package_name, 'params'), glob('params/*.yaml')),
     ] + generate_data_files('share/' + package_name + '/', 'models'),
     install_requires=['setuptools'],
     zip_safe=True,
