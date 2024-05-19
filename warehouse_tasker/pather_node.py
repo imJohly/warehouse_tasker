@@ -31,7 +31,7 @@ class MyNode(Node):
             self.get_logger().info(f'{transform.transform.translation}')
 
         except BaseException as e:
-            self.get_logger().warn(f'Error getting transform: {e}')
+        self.get_logger().warn(f'Error getting transform: {e}')
 
 
 def main(args = None) -> None:

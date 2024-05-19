@@ -9,10 +9,13 @@ To properly run this, there a number of dependencies that must be installed firs
 
 The [turtlebot3_multi_robot](https://github.com/arshadlab/turtlebot3_multi_robot) package from ashadlab and [ros_aruco_opencv](https://github.com/fictionlab/ros_aruco_opencv/tree/humble) package from fictionlab needs to be installed with the following,
 
+The following is for humble, but should work for foxy (just replace humble).
+
 ```bash
+sudo apt install ros-humble-aruco-opencv
+
 cd ~/<your ros2_ws here>/src
 git clone -b master https://github.com/arshadlab/turtlebot3_multi_robot.git
-git clone -b humble git@github.com:fictionlab/ros_aruco_opencv.git
 ```
 Install any dependencies for these packages with the following,
 

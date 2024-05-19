@@ -39,7 +39,8 @@ setup(
         'console_scripts': [
             'tasker_node = warehouse_tasker.tasker_node:main',
             'pather_node = warehouse_tasker.pather_node:main',
-            'marker_mapper_node = warehouse_tasker.marker_mapper_node:main'
+            'marker_mapper_node = warehouse_tasker.marker_mapper_node:main',
+            'voronoi_pather = warehouse_tasker.voronoi_pather:main',
         ],
     },
 )
