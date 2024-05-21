@@ -12,7 +12,7 @@ import numpy as np
 
 import threading
 
-from warehouse_tasker.voronoi_grapher import VoronoiGrapher
+from scripts.voronoi_grapher import VoronoiGrapher
 
 # import custom modules
 # from voronoi_grapher import VoronoiGrapher
@@ -98,16 +98,15 @@ class VoronoiPatherNode(Node):
                 elif value == 0:
                     image[i][j] = 255
 
-        # debugging purposes only
-        cv2.imwrite('import.jpg', image)
+        self.map_ = image
 
-        grapher = VoronoiGrapher(image)
-        map = grapher.process_map()
-        cv2.imwrite('processed.jpg', map)
+        # debugging purposes only
+        # cv2.imwrite('import.jpg', image)
+
 
         self.map_mutex_.release()
 
-    def create_path(self):
+    def update_map(self):
         self.map_mutex_.acquire(blocking=True)
 
         # create a graph from /map topic
@@ -120,6 +119,12 @@ class VoronoiPatherNode(Node):
         # grid.data = graph
         # self.voronoi_publisher.publish()
 
+        # voronoi = 
+
+        grapher = VoronoiGrapher(self.map_)
+        map = grapher.process_map()
+        cv2.imwrite('processed.jpg', map)
+
         self.map_mutex_.release()
 
 def main(args = None) -> None:
@@ -130,9 +135,9 @@ def main(args = None) -> None:
     while rclpy.ok():
         # Do stuff
 
-        path = scan_node.create_path()
+        path = scan_node.update_map()
 
-        rclpy.spin_once(scan_node, timeout_sec=0.5)
+        rclpy.spin_once(scan_node, timeout_sec=5)
 
 if __name__ == '__main__':
     main()
