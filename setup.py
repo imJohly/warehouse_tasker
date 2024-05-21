@@ -40,7 +40,8 @@ setup(
             'tasker_node = warehouse_tasker.tasker_node:main',
             'pather_node = warehouse_tasker.pather_node:main',
             'marker_mapper_node = warehouse_tasker.marker_mapper_node:main',
-            'voronoi_pather = warehouse_tasker.voronoi_pather:main',
+            'voronoi_graph_node = warehouse_tasker.voronoi_graph_node:main',
+            'voronoi_grapher = warehouse_tasker.voronoi_grapher:main',
         ],
     },
 )
