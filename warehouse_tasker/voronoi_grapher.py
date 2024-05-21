@@ -6,17 +6,22 @@ import numpy as np
 
 from sklearn.cluster import KMeans
 
+from scipy.spatial import Delaunay
+from sklearn.metrics.pairwise import distance
+
 class VoronoiGrapher:
 
     def __init__(self, map_image = None) -> None:
         self.CLUSTER_PERCENT = 0.1
 
-        self.map_ = map_image
-        self.process_map()
+        if map_image is None:
+            return None
 
-    def get_graph(self):
-        """Gets graph processed from the input map"""
-        return self.graph_
+        self.nodes = self.process_map(map_image)
+
+    # def get_graph(self):
+    #     """Gets graph processed from the input map"""
+    #     return self.graph_
 
     def find_local_minima(self, distance_field):
         """
@@ -57,30 +62,36 @@ class VoronoiGrapher:
             graph: An adjacency list representing the connected graph
         """
 
-        num_nodes = nodes.shape[0]
-        graph = [[] for _ in range(num_nodes)]  # Initialize empty adjacency list
+        # num_nodes = nodes.shape[0]
+        # graph = [[] for _ in range(num_nodes)]  # Initialize empty adjacency list
+        #
+        # # print('creating graph...')
+        # # Iterate through each node
+        # for i, node in enumerate(nodes):
+        #     # Calculate distances from the current node to all other nodes
+        #     distances = np.linalg.norm(nodes - node, axis=1)
+        #     
+        #     # Get indices of the k nearest neighbors (excluding the node itself)
+        #     nearest_indices = np.argsort(distances)[1:k+1]
+        #
+        #     # print(f"Node {i} neighbors: {nearest_indices}")
+        #
+        #     # Add edges to the adjacency list
+        #     for neighbor_index in nearest_indices:
+        #         graph[i].append(neighbor_index)
 
-        print('creating graph...')
-        # Iterate through each node
-        for i, node in enumerate(nodes):
-            # Calculate distances from the current node to all other nodes
-            distances = np.linalg.norm(nodes - node, axis=1)
-            
-            # Get indices of the k nearest neighbors (excluding the node itself)
-            nearest_indices = np.argsort(distances)[1:k+1]
-
-            print(f"Node {i} neighbors: {nearest_indices}")
-
-            # Add edges to the adjacency list
-            for neighbor_index in nearest_indices:
-                graph[i].append(neighbor_index)
+        print(f'Node amounts: {len(nodes)}')
+        graph = Delaunay(nodes).simplices
+        print(f'Simplices: {len(graph)}')
 
         return graph
 
     def process_map(self, map=None):
         if map is None:
-           map = self.map_
+           return None
 
+        gray = map
+    
         # pre-process the map image
         if isinstance(map, str):
             input_image = cv2.imread(map)
@@ -89,9 +100,6 @@ class VoronoiGrapher:
             # convert to a grayscale image
             gray = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
             print(f'converted to gray of size, {np.shape(gray)}')
-        
-        # no need to pre-process if directly from map
-        gray = map
         
         # convert to binary image
         _, bin = cv2.threshold(gray, 253, 255, cv2.THRESH_BINARY)
@@ -108,15 +116,19 @@ class VoronoiGrapher:
         kmeans.fit(clipped_endpoints)
         centers = np.round(kmeans.cluster_centers_).astype(int)
 
-        self.graph_ = self.create_graph(centers, k=4)
+        # self.graph_ = self.create_graph(centers, k=4)
 
-    
+        # print(len(self.graph_))
+
         # visualise connected nodes
-        for index, node in enumerate(self.graph_):
-            for connected in node:
-                cv2.line(distance_field, centers[index], centers[connected], (255,0,0), 1)
+        # for index, tri in enumerate(self.graph):
+        #     cv2.line(distance_field, centers[tri[0]], centers[tri[1]], (255,0,0), 1)
+        #     cv2.line(distance_field, centers[tri[0]], centers[tri[2]], (255,0,0), 1)
+        #     cv2.line(distance_field, centers[tri[1]], centers[tri[2]], (255,0,0), 1)
+        #
+        # cv2.imwrite('processed.jpg', distance_field)
 
-        return distance_field
+        return centers
 
 if __name__ == '__main__':
     v_graph = VoronoiGrapher('map.pgm')

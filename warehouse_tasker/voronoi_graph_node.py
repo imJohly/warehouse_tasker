@@ -1,16 +1,19 @@
 from typing import List
+from numpy.typing import NDArray
 import rclpy
 from rclpy.node import Node
 
 from geometry_msgs.msg import Pose
 from sensor_msgs.msg import LaserScan
-from nav_msgs.msg import Odometry, OccupancyGrid
+from nav_msgs.msg import MapMetaData, Odometry, OccupancyGrid
+from visualization_msgs.msg import MarkerArray, Marker
 
 import cv2
 import math
 import numpy as np
 
 import threading
+import time
 
 from warehouse_tasker.voronoi_grapher import VoronoiGrapher
 
@@ -63,12 +66,23 @@ class VoronoiPatherNode(Node):
             qos_profile=5
         )
 
+        self.marker_publisher = self.create_publisher(
+            msg_type=MarkerArray,
+            topic='/grapher_nodes',
+            qos_profile=100
+        )
+
         self.scan_mutex_ = threading.Lock()
         self.map_mutex_ = threading.Lock()
 
         self.scan_ = LaserScan()
-        self.map_ = Odometry()
-        self.map_params_ = None
+        self.map_ = []
+        self.map_params_: MapMetaData = MapMetaData()
+
+        self.nodes = []
+
+        self.create_timer(5, self.update_map)
+        self.create_timer(5, self.update_markers)
 
     def scan_callback(self, msg: LaserScan):
         self.scan_mutex_.acquire(blocking=True)
@@ -99,45 +113,75 @@ class VoronoiPatherNode(Node):
                     image[i][j] = 255
 
         self.map_ = image
+        
+        self.get_logger().info('Found new map!')
 
         # debugging purposes only
         # cv2.imwrite('import.jpg', image)
 
-
         self.map_mutex_.release()
+
+    def nodes_to_real(self, nodes) -> NDArray:
+        """Convert list of nodes to real space"""
+        real = np.array(nodes) * self.map_params_.resolution
+        origin = self.map_params_.origin.position
+        return [[node[0] + origin.x, node[1] + origin.y] for node in real]
 
     def update_map(self):
+        if len(self.map_) == 0:
+            print('finding map...')
+            return
+
         self.map_mutex_.acquire(blocking=True)
-
-        # create a graph from /map topic
-        # g = VoronoiGrapher(map_data=self.map_)
-        # graph = g.get_graph()
-
-        # publish graph
-        # grid = OccupancyGrid()
-        # grid.header.stamp = self.get_clock().now()
-        # grid.data = graph
-        # self.voronoi_publisher.publish()
-
-        # voronoi = 
-
         grapher = VoronoiGrapher(self.map_)
-        map = grapher.process_map()
-        cv2.imwrite('processed.jpg', map)
-
+        # # Debugging images only
+        # cv2.imwrite('processed.jpg', grapher.processed)
+        # print('processed!')
         self.map_mutex_.release()
+
+        self.nodes = self.nodes_to_real(grapher.nodes)
+
+        self.get_logger().info('Updated nodes.')
+
+    def update_markers(self):
+        if not self.nodes:
+            return
+
+        markers = []
+        for i, node in enumerate(self.nodes):
+            markers.append(self.create_sphere_markers(id=i, x=node[0], y=node[1], z=0.1))
+
+        msg = MarkerArray()
+        msg.markers = markers
+        self.marker_publisher.publish(msg)
+
+        self.get_logger().info(f'published {len(self.nodes)} markers.')
+
+    def create_sphere_markers(self, id, x, y, z):
+        marker = Marker()
+        marker.header.frame_id = "map"
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.type = Marker.SPHERE
+        marker.id = id
+        marker.scale.x = 0.1
+        marker.scale.y = 0.1
+        marker.scale.z = 0.1
+        marker.color.r = 0.0
+        marker.color.g = 0.0
+        marker.color.b = 1.0
+        marker.color.a = 1.0
+        marker.pose.position.x = x
+        marker.pose.position.y = y
+        marker.pose.position.z = z
+        
+        return marker
 
 def main(args = None) -> None:
     rclpy.init(args = args)
 
     print('initialising voronoi_node')
     scan_node = VoronoiPatherNode()
-    while rclpy.ok():
-        # Do stuff
-
-        path = scan_node.update_map()
-
-        rclpy.spin_once(scan_node, timeout_sec=5)
+    rclpy.spin(scan_node)
 
 if __name__ == '__main__':
     main()
