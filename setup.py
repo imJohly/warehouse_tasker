@@ -37,11 +37,11 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'tasker_node        = src.tasker_node:main',
-            'pather_node        = src.pather_node:main',
-            'marker_mapper_node = src.marker_mapper_node:main',
-            'voronoi_graph_node = src.voronoi_graph_node:main',
-            'voronoi_grapher    = src.voronoi_grapher:main',
+            'tasker_node        = warehouse_tasker.tasker_node:main',
+            'pather_node        = warehouse_tasker.pather_node:main',
+            'marker_mapper_node = warehouse_tasker.marker_mapper_node:main',
+            'voronoi_graph_node = warehouse_tasker.voronoi_graph_node:main',
+            'voronoi_grapher    = warehouse_tasker.voronoi_grapher:main',
         ],
     },
 )

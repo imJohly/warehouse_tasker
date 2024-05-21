@@ -12,7 +12,7 @@ import numpy as np
 
 import threading
 
-from scripts.voronoi_grapher import VoronoiGrapher
+from warehouse_tasker.voronoi_grapher import VoronoiGrapher
 
 # import custom modules
 # from voronoi_grapher import VoronoiGrapher
