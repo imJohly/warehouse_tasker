@@ -7,6 +7,21 @@ A repo for the warehouse task allocation system for a fleet of turtlebots.
 ## Dependencies
 To properly run this, there a number of dependencies that must be installed first,
 
+### Python Dependencies
+
+The following libraries must be installed,
+
+- scikit-learn
+- opencv-contrib-python
+
+Use the following line to install,
+
+```
+pip3 install scikit-learn opencv-contrib-python
+```
+
+### Package Dependencies
+
 The [turtlebot3_multi_robot](https://github.com/arshadlab/turtlebot3_multi_robot) package from ashadlab and [ros_aruco_opencv](https://github.com/fictionlab/ros_aruco_opencv/tree/humble) package from fictionlab needs to be installed with the following,
 
 The following is for humble, but should work for foxy (just replace humble).
