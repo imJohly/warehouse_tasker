@@ -83,5 +83,6 @@ ros2 launch warehouse_tasker world_triple_robot.launch.py
 ```
 To launch RVIZ inidividually for each robot
 
-```rviz2 -d /home/callum/catkin_ws/src/turtlebot3_multi_robot/rviz/multi_nav2_default_view.rviz --ros-args -r __node:=rviz2 -r __ns:=/tb1 -r /tf:=tf -r /tf_static:=tf_static -r /goal_pose:=goal_pose -r /clicked_point:=clicked_point -r /initialpose:=initialpose
+```bash
+rviz2 -d /home/callum/catkin_ws/src/turtlebot3_multi_robot/rviz/multi_nav2_default_view.rviz --ros-args -r __node:=rviz2 -r __ns:=/tb1 -r /tf:=tf -r /tf_static:=tf_static -r /goal_pose:=goal_pose -r /clicked_point:=clicked_point -r /initialpose:=initialpose
 ```
