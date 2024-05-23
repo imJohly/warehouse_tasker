@@ -144,18 +144,6 @@ def generate_launch_description():
             # Call add_action directly for the first robot to facilitate chain instantiation via RegisterEventHandler
             ld.add_action(bringup_cmd)
 
-        else:
-            # Use RegisterEventHandler to ensure next robot creation happens only after the previous one is completed.
-            # Simply calling ld.add_action for spawn_entity introduces issues due to parallel run.
-            spawn_turtlebot3_event = RegisterEventHandler(
-                event_handler=OnProcessExit(
-                    target_action=last_action,
-                    on_exit=[bringup_cmd],
-                )
-            )
-
-            ld.add_action(spawn_turtlebot3_event)
-
         # Save last instance for next RegisterEventHandler
         last_action = bringup_cmd
     ######################
@@ -167,15 +155,15 @@ def generate_launch_description():
         namespace = [ '/' + robot['name'] ]
 
         # Create a initial pose topic publish call
-        message = '{header: {frame_id: map}, pose: {pose: {position: {x: ' + \
-            robot['x_pose'] + ', y: ' + robot['y_pose'] + \
-            ', z: 0.1}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0000000}}, }}'
+        # message = '{header: {frame_id: map}, pose: {pose: {position: {x: ' + \
+        #     robot['x_pose'] + ', y: ' + robot['y_pose'] + \
+        #     ', z: 0.1}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0000000}}, }}'
 
-        initial_pose_cmd = ExecuteProcess(
-            cmd=['ros2', 'topic', 'pub', '-t', '3', '--qos-reliability', 'reliable', namespace + ['/initialpose'],
-                'geometry_msgs/PoseWithCovarianceStamped', message],
-            output='screen'
-        )
+        # initial_pose_cmd = ExecuteProcess(
+        #     cmd=['ros2', 'topic', 'pub', '-t', '3', '--qos-reliability', 'reliable', namespace + ['/initialpose'],
+        #         'geometry_msgs/PoseWithCovarianceStamped', message],
+        #     output='screen'
+        # )
 
         rviz_cmd = IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
@@ -195,17 +183,19 @@ def generate_launch_description():
 
         # Use RegisterEventHandler to ensure next robot rviz launch happens 
         # only after all robots are spawned
-        post_spawn_event = RegisterEventHandler(
-            event_handler=OnProcessExit(
-                target_action=last_action,
-                on_exit=[initial_pose_cmd, rviz_cmd, drive_turtlebot3_burger],
-            )
-        )
+        # post_spawn_event = RegisterEventHandler(
+        #     event_handler=OnProcessExit(
+        #         target_action=last_action,
+        #         # on_exit=[initial_pose_cmd, rviz_cmd, drive_turtlebot3_burger],
+        #         on_exit=[rviz_cmd, drive_turtlebot3_burger],
+        #     )
+        # )
 
         # Perform next rviz and other node instantiation after the previous intialpose request done
-        last_action = initial_pose_cmd
+        # last_action = initial_pose_cmd
+        last_action = rviz_cmd
 
-        ld.add_action(post_spawn_event)
+        # ld.add_action(post_spawn_event)
         ld.add_action(declare_params_file_cmd)
     ######################
 
