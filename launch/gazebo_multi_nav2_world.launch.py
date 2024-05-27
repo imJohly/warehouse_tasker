@@ -40,7 +40,12 @@ def generate_launch_description():
         # ...
         ]
 
-    TURTLEBOT3_MODEL = 'waffle'
+    # robots = [
+    #     # {'name' : ''},
+    #     {'name' : 'tb1'}
+    # ]
+
+    # TURTLEBOT3_MODEL = 'waffle'
 
     use_sim_time = LaunchConfiguration('use_sim_time', default='false')
     declare_use_sim_time = DeclareLaunchArgument(
@@ -57,10 +62,6 @@ def generate_launch_description():
         name='enable_rviz', default_value=enable_rviz, description='Enable rviz launch'
     )
     
-
-    
-    turtlebot3_multi_robot = get_package_share_directory('turtlebot3_multi_robot')
-
     package_dir = get_package_share_directory('turtlebot3_multi_robot')
     nav_launch_dir = os.path.join(package_dir, 'launch', 'nav2_bringup')
 
@@ -192,11 +193,15 @@ def generate_launch_description():
         # )
 
         # Perform next rviz and other node instantiation after the previous intialpose request done
+        # last_action = initial_pose_cmd
+        # last_action = rviz_md
+
+        # ld.add_action(post_spawn_event)
+        # ld.add_action(declare_params_file_cmd)
+
         ld.add_action(initial_pose_cmd)
         ld.add_action(rviz_cmd)
         ld.add_action(drive_turtlebot3_burger)
-        # ld.add_action(post_spawn_event)
-        ld.add_action(declare_params_file_cmd)
     ######################
 
     return ld
