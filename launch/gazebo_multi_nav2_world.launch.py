@@ -34,7 +34,7 @@ def generate_launch_description():
     robots = [
         {'name': 'tb1', 'x_pose': '-1.5', 'y_pose': '-0.5', 'z_pose': 0.01},
         {'name': 'tb2', 'x_pose': '-1.5', 'y_pose': '0.5', 'z_pose': 0.01},
-        {'name': 'tb3', 'x_pose': '1.5', 'y_pose': '-0.5', 'z_pose': 0.01}
+        # {'name': 'tb3', 'x_pose': '1.5', 'y_pose': '-0.5', 'z_pose': 0.01}
         # {'name': 'tb4', 'x_pose': '1.5', 'y_pose': '0.5', 'z_pose': 0.01},
         # ...
         # ...
@@ -72,7 +72,7 @@ def generate_launch_description():
         description='Full path to the RVIZ config file to use')
 
     urdf = os.path.join(
-        turtlebot3_multi_robot, 'urdf', 'turtlebot3_' + TURTLEBOT3_MODEL + '.urdf'
+        package_dir, 'urdf', 'turtlebot3_' + TURTLEBOT3_MODEL + '.urdf'
     )
 
     params_file = LaunchConfiguration('nav_params_file')
@@ -116,7 +116,7 @@ def generate_launch_description():
     # will get be published on root '/' namespace
     remappings = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
 
-    last_action = None
+    # last_action = None
 
     # Spawn turtlebot3 instances in gazebo
     for robot in robots:
@@ -137,15 +137,15 @@ def generate_launch_description():
                                         get_package_share_directory('nav2_bt_navigator'),
                                         'behavior_trees', 'navigate_w_replanning_and_recovery.xml'),
                                     'autostart': 'true',
-                                    'use_sim_time': use_sim_time, 'log_level': 'warn'}.items()
+                                    'use_sim_time': use_sim_time, 'log_level': 'warn'}.items(),
                                     )
 
-        if last_action is None:
+        # if last_action is None:
             # Call add_action directly for the first robot to facilitate chain instantiation via RegisterEventHandler
-            ld.add_action(bringup_cmd)
+        ld.add_action(bringup_cmd)
 
         # Save last instance for next RegisterEventHandler
-        last_action = bringup_cmd
+        # last_action = bringup_cmd
     ######################
 
     ######################
@@ -155,15 +155,15 @@ def generate_launch_description():
         namespace = [ '/' + robot['name'] ]
 
         # Create a initial pose topic publish call
-        # message = '{header: {frame_id: map}, pose: {pose: {position: {x: ' + \
-        #     robot['x_pose'] + ', y: ' + robot['y_pose'] + \
-        #     ', z: 0.1}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0000000}}, }}'
+        message = '{header: {frame_id: map}, pose: {pose: {position: {x: ' + \
+            robot['x_pose'] + ', y: ' + robot['y_pose'] + \
+            ', z: 0.1}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0000000}}, }}'
 
-        # initial_pose_cmd = ExecuteProcess(
-        #     cmd=['ros2', 'topic', 'pub', '-t', '3', '--qos-reliability', 'reliable', namespace + ['/initialpose'],
-        #         'geometry_msgs/PoseWithCovarianceStamped', message],
-        #     output='screen'
-        # )
+        initial_pose_cmd = ExecuteProcess(
+            cmd=['ros2', 'topic', 'pub', '-t', '3', '--qos-reliability', 'reliable', namespace + ['/initialpose'],
+                'geometry_msgs/PoseWithCovarianceStamped', message],
+            output='screen'
+        )
 
         rviz_cmd = IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
@@ -192,9 +192,9 @@ def generate_launch_description():
         # )
 
         # Perform next rviz and other node instantiation after the previous intialpose request done
-        # last_action = initial_pose_cmd
-        last_action = rviz_cmd
-
+        ld.add_action(initial_pose_cmd)
+        ld.add_action(rviz_cmd)
+        ld.add_action(drive_turtlebot3_burger)
         # ld.add_action(post_spawn_event)
         ld.add_action(declare_params_file_cmd)
     ######################
