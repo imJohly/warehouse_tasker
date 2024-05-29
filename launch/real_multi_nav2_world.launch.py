@@ -34,11 +34,7 @@ def generate_launch_description():
     robots = [
         {'name': 'tb1', 'x_pose': '-1.5', 'y_pose': '-0.5', 'z_pose': 0.01},
         {'name': 'tb2', 'x_pose': '-1.5', 'y_pose': '0.5', 'z_pose': 0.01},
-        # {'name': 'tb3', 'x_pose': '1.5', 'y_pose': '-0.5', 'z_pose': 0.01}
-        # {'name': 'tb4', 'x_pose': '1.5', 'y_pose': '0.5', 'z_pose': 0.01},
-        # ...
-        # ...
-        ]
+    ]
 
     TURTLEBOT3_MODEL = 'waffle'
 
@@ -78,7 +74,7 @@ def generate_launch_description():
     params_file = LaunchConfiguration('nav_params_file')
     declare_params_file_cmd = DeclareLaunchArgument(
         'nav_params_file',
-        default_value=os.path.join(package_dir, 'params', 'nav2_params.yaml'),
+        default_value=os.path.join(get_package_share_directory('warehouse_tasker'), 'params', 'nav2_params.yaml'),
         description='Full path to the ROS2 parameters file to use for all launched nodes')
     
      
