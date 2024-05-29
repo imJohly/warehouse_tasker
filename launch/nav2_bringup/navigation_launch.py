@@ -30,7 +30,7 @@ def generate_launch_description():
     # Get the launch directory
     #bringup_dir = get_package_share_directory('turtlebot3_gazebo')
  #   bringup_dir = get_package_share_directory('turtlebot3_navigation2') 
-    bringup_dir = get_package_share_directory('turtlebot3_multi_robot')    
+    bringup_dir = get_package_share_directory('warehouse_tasker')    
 
     namespace = LaunchConfiguration('namespace')
     use_sim_time = LaunchConfiguration('use_sim_time')
