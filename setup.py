@@ -25,6 +25,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'worlds'), glob('worlds/*.world')),
         (os.path.join('share', package_name, 'map'), glob('map/*')),
+        (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz'))
     ] + generate_data_files('share/' + package_name + '/', 'models')
     + generate_data_files('share/' + package_name + '/', 'launch')
     + generate_data_files('share/' + package_name + '/', 'params'),
