@@ -39,6 +39,7 @@ setup(
     entry_points={
         'console_scripts': [
             'agent_node         = warehouse_tasker.agent_node:main',
+            'mission_node       = warehouse_tasker.mission_node:main',
             'marker_mapper_node = warehouse_tasker.marker_mapper_node:main',
             'voronoi_graph_node = warehouse_tasker.voronoi_graph_node:main',
             'voronoi_grapher    = warehouse_tasker.voronoi_grapher:main',
