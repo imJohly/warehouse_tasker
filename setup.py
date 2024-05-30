@@ -23,7 +23,8 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-    ] + generate_data_files('share/' + package_name + '/', 'launch')
+    ]
+    + generate_data_files('share/' + package_name + '/', 'launch'),
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Johnson Ly',
@@ -33,7 +34,6 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'unloader_node         = warehouse_tasker.unloader_node:main',
         ],
     },
 )

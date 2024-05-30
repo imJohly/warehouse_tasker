@@ -1,7 +1,7 @@
 import time
 
 import rclpy
-from rclpy import Node
+from rclpy.node import Node
 
 from std_srvs.srv import SetBool
 
@@ -27,6 +27,7 @@ class UnloaderNode(Node):
         if request.data:
             GPIO.output(self.pin, GPIO.HIGH)
             time.sleep(1)
+            GPIO.output(self.pin, GPIO.LOW)
 
         response.success = True
         return response
