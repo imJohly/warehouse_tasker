@@ -35,7 +35,8 @@ def generate_launch_description():
     # Get the launch directory
 
     bringup_dir = get_package_share_directory('warehouse_tasker')
-    launch_dir = os.path.join(bringup_dir, 'launch', 'nav2_bringup')
+    launch_dir = os.path.join(bringup_dir, 'launch')
+
 
     # Names and poses of the robots
     robots = [
@@ -133,8 +134,10 @@ def generate_launch_description():
 
         group = GroupAction([
             IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                        os.path.join(launch_dir, 'rviz_launch_alternate.py')), #CUNT WHY WON"T YOU FUCKING WORK
+                PythonLaunchDescriptionSource(os.path.join(bringup_dir, 
+                                                            'launch', 
+                                                            'nav2_bringup',
+                                                            'rviz_launch_alternate.py')), #CUNT WHY WON"T YOU FUCKING WORK
                 condition=IfCondition(use_rviz),
                 launch_arguments={
                                   'namespace': TextSubstitution(text=robot['name']),

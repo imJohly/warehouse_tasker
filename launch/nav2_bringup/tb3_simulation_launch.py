@@ -29,7 +29,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     # Get the launch directory
     bringup_dir = get_package_share_directory('warehouse_tasker')
-    launch_dir = os.path.join(bringup_dir, 'launch')
+    launch_dir = os.path.join(bringup_dir, 'launch', 'nav2_bringup')
 
     # Create the launch configuration variables
     slam = LaunchConfiguration('slam')
@@ -57,6 +57,7 @@ def generate_launch_description():
     remappings = [('/tf', 'tf'),
                   ('/tf_static', 'tf_static')]
 
+    TURTLEBOT3_MODEL = 'waffle'
     # Declare the launch arguments
     declare_namespace_cmd = DeclareLaunchArgument(
         'namespace',
@@ -140,7 +141,11 @@ def generate_launch_description():
         cmd=['gzclient'],
         cwd=[launch_dir], output='screen')
 
-    urdf = os.path.join(bringup_dir, 'urdf', 'turtlebot3_waffle.urdf')
+    turtlebot3_multi_robot = get_package_share_directory('turtlebot3_multi_robot')
+
+    urdf = os.path.join(
+        turtlebot3_multi_robot, 'urdf', 'turtlebot3_' + TURTLEBOT3_MODEL + '.urdf'
+    )
 
     start_robot_state_publisher_cmd = Node(
         condition=IfCondition(use_robot_state_pub),

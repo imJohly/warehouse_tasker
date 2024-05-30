@@ -28,7 +28,7 @@ from launch_ros.actions import PushRosNamespace
 def generate_launch_description():
     # Get the launch directory
     bringup_dir = get_package_share_directory('warehouse_tasker')
-    launch_dir = os.path.join(bringup_dir, 'launch')
+    launch_dir = os.path.join(bringup_dir, 'launch', 'nav2_bringup')
 
     # Create the launch configuration variables
     namespace = LaunchConfiguration('namespace')
