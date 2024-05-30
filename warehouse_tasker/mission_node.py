@@ -1,13 +1,13 @@
 import argparse
 
-from numpy import number
+from numpy import append, number
 import rclpy
 from rclpy.node import Node
 
-from warehouse_tasker_interfaces.srv import SendTask
+from warehouse_tasker_interfaces.srv import SendTask, Register
 
 class MissionNode(Node):
-    def __init__(self, number_of_goals: int, number_of_robots: int) -> None:
+    def __init__(self, number_of_goals: int) -> None:
         super().__init__('mission_node')
  
         self.robots_and_goals = []
@@ -19,16 +19,17 @@ class MissionNode(Node):
             self.goal_states[goal] = 'unset'
         self.get_logger().info(f'There are {number_of_goals} goals.')
 
-        self.agents = []
-        for agent in range(number_of_robots):
-            self.agents.append()
-
-        print(self.goal_states)
-
         self.task_service = self.create_service(
             srv_type=SendTask,
             srv_name='send_task',
             callback=self.send_task_callback
+        )
+
+        self.agents = []
+        self.registration_service = self.create_service(
+            srv_type=Register,
+            srv_name='register_agent',
+            callback=self.registration_callback
         )
 
         self.loop_timer = self.create_timer(timer_period_sec=1, callback=self.loop)
@@ -52,8 +53,16 @@ class MissionNode(Node):
 
         # start agent on new task
         # for one robot
-        
+        # self.agents
 
+        response.success = True
+        return response
+
+    def registration_callback(self, request, response):
+        self.get_logger().info(f'Registering agent {request.robot_name}')
+        self.agents.append(request.robot_name)
+
+        #TODO: add error handling
 
         response.success = True
         return response
@@ -71,11 +80,11 @@ def main(args = None) -> None:
     
     parser = argparse.ArgumentParser(description='Mission node arguments.')
     parser.add_argument('goals', metavar='-g', type=int, help='the number of goals to initialise')
-    parser.add_argument('robots', metavar='-r', type=int, help='the number of active robots')
     arguments = parser.parse_args()
 
-    node = MissionNode(arguments.goals, arguments.robots)
+    node = MissionNode(arguments.goals)
     rclpy.spin(node)
+    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
