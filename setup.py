@@ -23,12 +23,7 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'worlds'), glob('worlds/*.world')),
-        (os.path.join('share', package_name, 'map'), glob('map/*')),
-        (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz'))
-    ] + generate_data_files('share/' + package_name + '/', 'models')
-    + generate_data_files('share/' + package_name + '/', 'launch')
-    + generate_data_files('share/' + package_name + '/', 'params'),
+    ] + generate_data_files('share/' + package_name + '/', 'launch')
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Johnson Ly',
@@ -38,10 +33,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'agent_node         = warehouse_tasker.agent_node:main',
-            'marker_mapper_node = warehouse_tasker.marker_mapper_node:main',
-            'voronoi_graph_node = warehouse_tasker.voronoi_graph_node:main',
-            'voronoi_grapher    = warehouse_tasker.voronoi_grapher:main',
+            'unloader_node         = warehouse_tasker.unloader_node:main',
         ],
     },
 )
