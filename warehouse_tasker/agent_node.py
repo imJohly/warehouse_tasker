@@ -22,6 +22,7 @@ class AgentNode(Node):
         self._compute_action_client = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
         self._nav_action_client     = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
+
     def send_goal(self):
         goal = PoseStamped()
         goal.header.frame_id = 'map'

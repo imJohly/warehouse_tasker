@@ -7,7 +7,7 @@ from rclpy.node import Node
 from warehouse_tasker_interfaces.srv import SendTask
 
 class MissionNode(Node):
-    def __init__(self, number_of_goals: int) -> None:
+    def __init__(self, number_of_goals: int, number_of_robots: int) -> None:
         super().__init__('mission_node')
  
         self.robots_and_goals = []
@@ -18,6 +18,10 @@ class MissionNode(Node):
         for goal in range(number_of_goals):
             self.goal_states[goal] = 'unset'
         self.get_logger().info(f'There are {number_of_goals} goals.')
+
+        self.agents = []
+        for agent in range(number_of_robots):
+            self.agents.append()
 
         print(self.goal_states)
 
@@ -47,6 +51,8 @@ class MissionNode(Node):
         self.goal_states[request.goal] = 'set'
 
         # start agent on new task
+        # for one robot
+        
 
 
         response.success = True
@@ -64,10 +70,11 @@ def main(args = None) -> None:
     rclpy.init(args = args)
     
     parser = argparse.ArgumentParser(description='Mission node arguments.')
-    parser.add_argument('number_of_goals', metavar='-n', type=int, help='the number of goals to initialise')
+    parser.add_argument('goals', metavar='-g', type=int, help='the number of goals to initialise')
+    parser.add_argument('robots', metavar='-r', type=int, help='the number of active robots')
     arguments = parser.parse_args()
 
-    node = MissionNode(arguments.number_of_goals)
+    node = MissionNode(arguments.goals, arguments.robots)
     rclpy.spin(node)
 
 if __name__ == '__main__':
