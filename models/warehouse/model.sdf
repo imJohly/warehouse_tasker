@@ -1,0 +1,44 @@
+<?xml version='1.0'?>
+<sdf version='1.7'>
+    <model name='warehouse'>
+        <link name='link_0'>
+           
+            <collision name='one'>
+                <pose>0 0 0 0 0 0</pose>
+                    <geometry>
+                        <mesh>
+                            <uri>model://warehouse/meshes/warehouse.dae</uri>
+                            <scale>1 1 1</scale>
+                        </mesh>
+                    </geometry>
+                <max_contacts>10</max_contacts>
+                <surface>
+                    <bounce/>
+                    <friction>
+                        <ode/>
+                    </friction>
+                    <contact>
+                        <ode/>
+                    </contact>
+                </surface>
+            </collision>
+
+            <visual name='one'>
+                <pose>0 0 0 0 0 0</pose>
+                <geometry>
+                    <mesh>
+                        <uri>model://warehouse/meshes/warehouse.dae</uri>
+                        <scale>1 1 1</scale>
+                    </mesh>
+                </geometry>
+                <material>
+                    <script>
+                        <uri>file://media/materials/scripts/gazebo.material</uri>
+                        <name>Gazebo/Blue</name>
+                    </script>
+                </material>
+            </visual>
+        </link>
+        
+    </model>
+</sdf>
