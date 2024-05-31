@@ -1,0 +1,33 @@
+positions:
+  0:
+    translation: [-1.051, 0.619, 0.068]
+  1:
+    translation: [-0.363, 0.609, 0.068]
+  2:
+    translation: [0.355, 0.602, 0.068]
+  3:
+    translation: [1.055, 0.594, 0.068]
+  4:
+    translation: [-1.060, 1.158, 0.068]
+  5:
+    translation: [-0.344, 1.145, 0.068]
+  6:
+    translation: [0.361, 1.158, 0.068]
+  7:
+    translation: [1.072, 1.164, 0.068]
+  8:
+    translation: [-1.052, 2.443, 0.068]
+  9:
+    translation: [-0.346, 2.445, 0.068]
+  10:
+    translation: [0.367, 2.447, 0.068]
+  11:
+    translation: [1.073, 2.419, 0.068]
+  12:
+    translation: [-1.065, 3.019, 0.068]
+  13:
+    translation: [-0.362, 3.026, 0.068]
+  14:
+    translation: [0.343, 3.022, 0.068]
+  15:
+    translation: [1.069, 3.026, 0.068]

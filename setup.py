@@ -43,6 +43,7 @@ setup(
             'marker_mapper_node = warehouse_tasker.marker_mapper_node:main',
             'voronoi_graph_node = warehouse_tasker.voronoi_graph_node:main',
             'voronoi_grapher    = warehouse_tasker.voronoi_grapher:main',
+            'drop_zone_broadcaster = warehouse_tasker.drop_zone_broadcaster:main'
         ],
     },
 )
