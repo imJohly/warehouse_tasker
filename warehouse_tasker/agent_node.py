@@ -1,5 +1,7 @@
 import argparse
 
+import threading
+
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
@@ -9,85 +11,90 @@ import math
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 
-from nav2_msgs.action import ComputePathToPose
-from nav2_msgs.action import NavigateToPose
+# from nav2_msgs.action import ComputePathToPose
+from std_srvs.srv import SetBool
 
 from warehouse_tasker_interfaces.srv import SendGoal, Register
 
+from warehouse_tasker.agent_action_client import NavActionClient
+
 class AgentNode(Node):
 
-    def __init__(self, name: int) -> None:
+    def __init__(self, name) -> None:
         super().__init__('agent_node')
 
-        self.current_path = Path().poses
-
-        self.distance_to_goal = 0
-
-        self._compute_action_client = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
-        self._nav_action_client     = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-
+        # self._compute_action_client = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
         self.goal_service = self.create_service(SendGoal, 'send_goal', self.goal_service_callback)
 
-        self.registration_client = self.create_client(Register, 'register_agent')
+        self.registration_client    = self.create_client(Register, 'register_agent')
+        self.door_client            = self.create_client(SetBool, 'open_door')
+
+        self.nav_goal_publisher = self.create_publisher(
+            msg_type=PoseStamped,
+            topic='goal_pose',
+            qos_profile=5,
+        )
+
+        self.register_agent(name)
+        self.create_timer(1.0, self.loop)
+
+# -------------------------------------------------------------------------------------------
+
+    def register_agent(self, name):
         while not self.registration_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('service not available, waiting again...')
         register_req = Register.Request()
         register_req.robot_name = name
+
         self.get_logger().info(f'Registering agent {name}')
-        self.future = self.registration_client.call_async(register_req)
-        rclpy.spin_until_future_complete(self, self.future)
-        # return self.future.result()
 
-    def send_compute_goal(self, goal: PoseStamped):
-        goal_msg = ComputePathToPose.Goal()
-        goal_msg.goal = goal
+        future = self.registration_client.call_async(register_req)
+        rclpy.spin_until_future_complete(self, future)
+        return future.result()
 
-        self._compute_action_client.wait_for_server()
+# -------------------------------------------------------------------------------------------
 
-        self._send_goal_future = self._compute_action_client.send_goal_async(goal_msg)
-        self._send_goal_future.add_done_callback(self.compute_goal_response_callback)
+    def activate_payload_mechanism(self) -> bool:
+        while not self.door_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service not available, waiting again...')
+        payload_req = SetBool.Request()
+        payload_req.data = True
 
-    def compute_goal_response_callback(self, future):
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().info('Goal rejected :(')
-            return
+        self.get_logger().info(f'Calling service to payload mechanism...')
 
-        self.get_logger().info('Goal accepted :)')
+        future = self.door_client.call_async(payload_req)
+        rclpy.spin_until_future_complete(self, future)
+        return future.result()
 
-        self._get_result_future = goal_handle.get_result_async()
-        self._get_result_future.add_done_callback(self.get_compute_result_callback)
+# -------------------------------------------------------------------------------------------
 
-    def get_compute_result_callback(self, future):
-        result = future.result().result
-        self.get_logger().info(f'Result: {len(result.path.poses)}')
-        self.get_logger().info(f'Path Length: {self.calculate_path_distance(result.path)}')
-        # rclpy.shutdown()
-
-    def send_nav_goal(self, goal: PoseStamped):
-        goal_msg = NavigateToPose.Goal()
-        goal_msg.pose = goal
-
-        self._nav_action_client.wait_for_server()
-
-        self._send_goal_future = self._nav_action_client.send_goal_async(goal_msg)
-        self._send_goal_future.add_done_callback(self.nav_goal_response_callback)
-
-    def nav_goal_response_callback(self, future):
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().info('Goal rejected :(')
-            return
-
-        self.get_logger().info('Goal accepted :)')
-
-        self._get_result_future = goal_handle.get_result_async()
-        self._get_result_future.add_done_callback(self.get_nav_result_callback)
-
-    def get_nav_result_callback(self, future):
-        result = future.result().result
-        self.get_logger().info(f'Result: {result}')
-        # rclpy.shutdown()
+    # def send_compute_goal(self, goal: PoseStamped):
+    #     goal_msg = ComputePathToPose.Goal()
+    #     goal_msg.goal = goal
+    #
+    #     self._compute_action_client.wait_for_server()
+    #
+    #     self._send_compute_goal_future = self._compute_action_client.send_goal_async(goal_msg)
+    #     self._send_compute_goal_future.add_done_callback(self.compute_goal_response_callback)
+    #
+    # def compute_goal_response_callback(self, future):
+    #     goal_handle = future.result()
+    #     if not goal_handle.accepted:
+    #         self.get_logger().info('Goal rejected :(')
+    #         return
+    #
+    #     self.get_logger().info('Goal accepted :)')
+    #
+    #     self._get_compute_result_future = goal_handle.get_result_async()
+    #     self._get_compute_result_future.add_done_callback(self.get_compute_result_callback)
+    #
+    # def get_compute_result_callback(self, future):
+    #     result = future.result().result
+    #     self.get_logger().info(f'Result: {len(result.path.poses)}')
+    #     self.get_logger().info(f'Path Length: {self.calculate_path_distance(result.path)}')
+    #     
+    #     time.sleep(0.5)
+    #     return result
 
 # -------------------------------------------------------------------------------------------
 
@@ -98,21 +105,16 @@ class AgentNode(Node):
 
         goal.pose.position.x = request.x
         goal.pose.position.y = request.y
+        self.get_logger().info(f'Received goal locations - x: {request.x}, y: {request.y}')
 
-        self.send_nav_goal(goal)
-
+        self.nav_goal_publisher.publish(goal)
+        
+        # rclpy.spin_once(self, timeout_sec=1.0)
         #TODO: add error handling
         
         response.success = True
         return response
 
-# -------------------------------------------------------------------------------------------
-
-    def activate_payload_mechanism(self) -> bool:
-        success: bool = False
-
-
-        return success
 
 # -------------------------------------------------------------------------------------------
 
@@ -127,6 +129,16 @@ class AgentNode(Node):
 
         return path_distance
 
+# -------------------------------------------------------------------------------------------
+
+    def start_nav_client(self, goal: PoseStamped):
+        nav_client = NavActionClient()
+        nav_client.send_nav_goal(goal)
+        rclpy.spin(nav_client)
+
+    def loop(self):
+        print('looping')
+
 def main(args = None) -> None:
     rclpy.init(args = args)
 
@@ -139,6 +151,8 @@ def main(args = None) -> None:
 
     rclpy.spin(node)
     rclpy.shutdown()
+
+    print('done!')
 
 if __name__ == '__main__':
     main()
