@@ -4,6 +4,8 @@
 
 A repo for the warehouse task allocation system for a fleet of turtlebots.
 
+See [warehouse_tasker_interfaces](https://github.com/imJohly/warehouse_tasker_interfaces/) for info on the interfaces package.
+
 ## Dependencies
 To properly run this, there a number of dependencies that must be installed first,
 
