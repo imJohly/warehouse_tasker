@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 import rclpy
 from rclpy.clock import Time
 from rclpy.duration import Duration
-from rclpy.node import Node
+from rclpy.node import Client, Node
 
 from tf2_ros import Buffer, TransformListener
 from geometry_msgs.msg import TransformStamped
@@ -34,14 +34,12 @@ class MissionNode(Node):
         self.tasks: list[TaskData]      = []
         self.task_count: int            = 0
 
-        # services
+        # Services
         self.registration_service       = self.create_service(Register, 'register_agent', self.registration_callback)
         self.task_service               = self.create_service(SendTask, 'send_task', self.send_task_callback)
 
-        # clients
-        # TODO: make this work with multiple agent clients
-        self.agent_goal_client = self.create_client(SendGoal, 'send_goal')
-
+        # Clients
+        self.agent_clients: list[Client] = []
 
         self.initialise_goals(number_of_goals)
         self.loop_timer = self.create_timer(1.0, self.loop)
@@ -90,10 +88,15 @@ class MissionNode(Node):
         response.success = True
         return response
 
-    # TODO: add a part that adds a client to a list to keep track of them
     def registration_callback(self, request: Register.Request, response: Register.Response):
         """Agent registration callback function"""
         self.agents.append(ObjectData(id=request.id, active=False))
+
+        # create new client for registered agent
+        # FIX: Needs to check if it is a valid namespace
+        new_client = self.create_client(SendGoal, f'{request.id}/send_goal') 
+        self.agent_clients.append(new_client)
+        
         self.get_logger().info(f'Registered agent {request.id}')
 
         response.success = True
@@ -109,9 +112,15 @@ class MissionNode(Node):
         self.get_logger().info(f'Initialised {number_of_goals} goals.')
 
     # TODO: include agent client parameter
-    def send_request(self, goal_id: str):
+    def send_request(self, agent_id: str, goal_id: str):
         """Send a start task request to agent"""
-        while not self.agent_goal_client.wait_for_service(timeout_sec=1.0):
+        agent_client = next((client for client in self.agent_clients if agent_id in client.srv_name), None)
+
+        if agent_client is None:
+            self.get_logger().warn('Goal request failed: Non-existent agent! Ignoring...')
+            return
+
+        while not agent_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('service not available, waiting again...')
 
         marker_tf = self.get_marker_transform(int(goal_id))
@@ -121,7 +130,7 @@ class MissionNode(Node):
         goal_req.y = marker_tf.transform.translation.y
 
         self.get_logger().info(f'Sending agent to goal {goal_id}')
-        future = self.agent_goal_client.call_async(goal_req)
+        future = agent_client.call_async(goal_req)
         return future.result()
 
     def get_marker_transform(self, index) -> TransformStamped:
@@ -148,7 +157,7 @@ class MissionNode(Node):
         complete_tasks: list[TaskData] = []
 
         for task in self.tasks:
-            self.send_request(task.goal_id)
+            self.send_request(task.agent_id, task.goal_id)
 
             task_agent = self.get_object_by_id(self.agents, task.agent_id)
             task_goal = self.get_object_by_id(self.goals, task.goal_id)

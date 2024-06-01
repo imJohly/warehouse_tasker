@@ -19,12 +19,12 @@ from std_srvs.srv import SetBool
 from warehouse_tasker_interfaces.srv import SendGoal, Register
 
 class State(Enum):
-    STANDBY = 1
-    ACTIVE = 2
-    RETURNING = 3
+    STANDBY     = 1
+    ACTIVE      = 2
+    RETURNING   = 3
 
 class AgentNode(Node):
-    def __init__(self, name) -> None:
+    def __init__(self) -> None:
         super().__init__('agent_node')
 
         self.active_goal: PoseStamped | None = None
@@ -43,19 +43,23 @@ class AgentNode(Node):
         self.goal_service = self.create_service(SendGoal, 'send_goal', self.goal_service_callback)
 
         # Service Clients
-        self.registration_client    = self.create_client(Register, 'register_agent')
+        self.registration_client    = self.create_client(Register, '/register_agent')
         self.door_client            = self.create_client(SetBool, 'open_door')
 
-        self.register_agent(name)
-        self.loop_timer = self.create_timer(0.5, self.loop)
+        # Register agent to mission node
+        if self.get_namespace() == '/':
+            self.register_agent('')
+        else:
+            self.register_agent(self.get_namespace())
 
+        self.loop_timer = self.create_timer(0.5, self.loop)
         self.callback_group = ReentrantCallbackGroup()
 
 # -------------------------------------------------------------------------------------------
 
     def register_agent(self, name):
         while not self.registration_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('service not available, waiting again...')
+            self.get_logger().warn('/register_agent service not available, waiting again...')
         register_req = Register.Request()
         register_req.id = name
 
@@ -65,11 +69,9 @@ class AgentNode(Node):
         rclpy.spin_until_future_complete(self, future)
         return future.result()
 
-# -------------------------------------------------------------------------------------------
-
     def activate_payload_mechanism(self):
         while not self.door_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('service not available, waiting again...')
+            self.get_logger().warn('/open_door service not available, waiting again...')
         payload_req = SetBool.Request()
         payload_req.data = True
 
@@ -190,7 +192,7 @@ class AgentNode(Node):
                 pass
             case State.ACTIVE:
                 # NOTE: This needs to be run with a working service active
-                self.activate_payload_mechanism()
+                # self.activate_payload_mechanism()
 
                 # TODO: add a wait or create an action_server for the payload_mechanism...
 
@@ -214,14 +216,7 @@ class AgentNode(Node):
 def main(args = None) -> None:
     rclpy.init(args = args)
 
-    # Argument stuff
-    # FIX: change this so that arguments are parsed with ros-args
-    # this will be where the namespace is entered
-    parser = argparse.ArgumentParser(description='Mission node arguments.')
-    parser.add_argument('name', help='namespace of robot')
-    arguments = parser.parse_args()
-
-    node = AgentNode(arguments.name)
+    node = AgentNode()
     node.get_logger().info('Initialised agent node!')
 
     executor = MultiThreadedExecutor()
