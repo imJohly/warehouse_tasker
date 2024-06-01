@@ -1,7 +1,5 @@
 import argparse
 
-import threading
-
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
@@ -136,9 +134,6 @@ class AgentNode(Node):
         nav_client.send_nav_goal(goal)
         rclpy.spin(nav_client)
 
-    def loop(self):
-        print('looping')
-
 def main(args = None) -> None:
     rclpy.init(args = args)
 
@@ -150,9 +145,6 @@ def main(args = None) -> None:
     node.get_logger().info(f'Initialised Agent...')
 
     rclpy.spin(node)
-    rclpy.shutdown()
-
-    print('done!')
 
 if __name__ == '__main__':
     main()

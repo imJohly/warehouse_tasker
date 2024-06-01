@@ -1,19 +1,26 @@
 import argparse
-from concurrent import futures
-from time import time
+from dataclasses import asdict, dataclass
 
-from numpy import append, number
 import rclpy
 from rclpy.clock import Time
 from rclpy.duration import Duration
 from rclpy.node import Node
 
 from tf2_ros import Buffer, TransformListener
-from geometry_msgs.msg import Transform, TransformStamped  # Message type for transform
+from geometry_msgs.msg import TransformStamped
 
 from warehouse_tasker_interfaces.srv import SendTask, Register, SendGoal
 
-from warehouse_tasker import agent_action_client
+@dataclass
+class ObjectData:
+    id:         str
+    active:     bool = False
+
+@dataclass
+class TaskData:
+    id:         int
+    agent_id:   str
+    goal_id:    str
 
 class MissionNode(Node):
     def __init__(self, number_of_goals: int) -> None:
@@ -21,75 +28,111 @@ class MissionNode(Node):
         self.tf_buffer = Buffer()
         self.listener = TransformListener(self.tf_buffer, self)
 
-        self.robots_and_goals = []
+        self.goals: list[ObjectData]    = []
+        self.agents: list[ObjectData]   = []
 
-        # initialise goal_states
-        self.number_of_goals = number_of_goals
-        self.goal_states = {}
-        for goal in range(number_of_goals):
-            self.goal_states[goal] = 'unset'
-        self.get_logger().info(f'There are {number_of_goals} goals.')
+        self.tasks: list[TaskData]      = []
+        self.task_count: int            = 0
 
-        self.task_service = self.create_service(
-            srv_type=SendTask,
-            srv_name='send_task',
-            callback=self.send_task_callback
-        )
+        # services
+        self.registration_service       = self.create_service(Register, 'register_agent', self.registration_callback)
+        self.task_service               = self.create_service(SendTask, 'send_task', self.send_task_callback)
 
-        self.agents = []
-        self.registration_service = self.create_service(
-            srv_type=Register,
-            srv_name='register_agent',
-            callback=self.registration_callback
-        )
-
+        # clients
+        # TODO: make this work with multiple agent clients
         self.agent_goal_client = self.create_client(SendGoal, 'send_goal')
+
+        # initialisation
+        self.initialise_goals(number_of_goals)
 
         self.loop_timer = self.create_timer(1.0, self.loop)
 
+# ----------------------------------------------------------------------------
+
     def send_task_callback(self, request, response):
-        if not request.goal in self.goal_states:
-            self.get_logger().info(f'Incoming task failed: Non-existent Goal {request.goal}')
+        requested_agent = next((agent for agent in self.agents if agent.id == str(request.robot)), None)
+        requested_goal = next((goal for goal in self.goals if goal.id == str(request.goal)), None)
+
+        # TODO: need to change service to use a string type for namespaces
+        if requested_agent is None:
+            self.get_logger().warn(f'Incoming task rejected: Non-existent agent {request.robot}!')
             response.success = False
             return response
 
-        if not f'{request.robot}' in self.agents:
-            self.get_logger().info(f'Incoming task failed: Non-existent Agent {request.robot}')
+        if requested_goal is None:
+            self.get_logger().warn(f'Incoming task rejected: Non-existent goal {request.goal}!')
             response.success = False
             return response
 
-        # check if the goal is unset,
-        if self.goal_states[request.goal] == 'set':
-            self.get_logger().info(f'Incoming task: Failed to set Robot {request.robot} to Goal {request.goal}')
+        if requested_agent.active:
+            self.get_logger().warn(f'Incoming task rejected: Agent {request.robot} is currently active!')
             response.success = False
             return response
 
+        if requested_goal.active:
+            self.get_logger().warn(f'Incoming task rejected: Goal {request.goal} has already been set!')
+            response.success = False
+            return response
+        
+        # set to active for agents and goals
+        requested_agent.active = True
+        requested_goal.active = True
+
+        # add ongoing task to track them
+        self.task_count += 1
+        new_task = TaskData(
+            id=self.task_count,
+            agent_id=requested_agent.id,
+            goal_id=requested_goal.id
+        )
+        self.tasks.append(new_task)
         self.get_logger().info(f'Incoming task: Robot {request.robot} to Goal {request.goal}')
 
-        self.robots_and_goals.append((request.robot, request.goal))
-        self.goal_states[request.goal] = 'set'
-        print(self.send_request(request.goal))
-
         response.success = True
         return response
 
+    # TODO: add a part that adds a client to a list to keep track of them
     def registration_callback(self, request, response):
-        self.get_logger().info(f'Registering agent {request.robot_name}')
-        self.agents.append(request.robot_name)
-
-        #TODO: add error handling
+        """Agent registration callback function"""
+        self.agents.append(ObjectData(id=request.robot_name, active=False))
+        self.get_logger().info(f'Registered agent {request.robot_name}')
 
         response.success = True
         return response
+
+# ----------------------------------------------------------------------------
+
+    def initialise_goals(self, number_of_goals: int) -> None:
+        """Initialises goals"""
+        for goal_index in range(number_of_goals):
+            self.goals.append(ObjectData(id=str(goal_index), active=False))
+
+        self.get_logger().info(f'Initialised {number_of_goals} goals.')
+
+    # TODO: include agent client parameter
+    def send_request(self, goal_id: str):
+        """Send a start task request to agent"""
+        while not self.agent_goal_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service not available, waiting again...')
+
+        marker_tf = self.get_marker_transform(int(goal_id))
+
+        goal_req = SendGoal.Request()
+        goal_req.x = marker_tf.transform.translation.x
+        goal_req.y = marker_tf.transform.translation.y
+
+        self.get_logger().info(f'Sending agent to goal {goal_id}')
+        future = self.agent_goal_client.call_async(goal_req)
+        return future.result()
 
     def get_marker_transform(self, index):
         try:
             transform: TransformStamped = self.tf_buffer.lookup_transform(
-                    target_frame='map',
-                    source_frame=f'marker{index}',
-                    time=Time(seconds=0),
-                    timeout=Duration(seconds=0.1),
-                    )
+                target_frame='map',
+                source_frame=f'marker{index}',
+                time=Time(seconds=0),
+                timeout=Duration(seconds=1),
+            )
             self.get_logger().info(f'Successfully found tf, {transform.transform.translation}')
             return transform
 
@@ -97,45 +140,35 @@ class MissionNode(Node):
             self.get_logger().warn(f'Error getting transform: {e}')
             return TransformStamped()
 
-    def send_request(self, goal_index: int):
-        while not self.agent_goal_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('service not available, waiting again...')
-        goal_req = SendGoal.Request()
-        goal_req.x = 0.0
-        goal_req.y = 0.0
-        self.get_logger().info(f'Sending agent to goal {goal_index}')
-
-        future = self.agent_goal_client.call_async(goal_req)
-        rclpy.spin_until_future_complete(self, future)
-        return future.result()
+    def get_object_by_id(self, object_list: list[ObjectData], id: str) -> ObjectData | None:
+        return next((object for object in object_list if object.id == id), None)
 
     def loop(self) -> None:
-        if self.number_of_goals <= 0:
-            self.get_logger().error(f'No goals initialised, shutting down...')
-            self.destroy_node()
-            return
+        complete_tasks: list[TaskData] = []
 
-        self.get_logger().info(f'Currently has: {len(self.robots_and_goals)} goals')
-        
-        # for rag in self.robots_and_goals:
-        #     # add namespace here
-        #     # agent_goal_client = self.create_client(
-        #     #     srv_type=SendGoal,
-        #     #     srv_name='send_goal',
-        #     # )
-        #
-        #     marker_tf = self.get_marker_transform(rag[1])
-        #
-        #     goal_req = SendGoal.Request()
-        #     goal_req.x = marker_tf.transform.translation.x
-        #     goal_req.y = marker_tf.transform.translation.y
-        #     self.get_logger().info(f'Sending agent to goal {rag[1]}')
-        #     future = self.agent_goal_client.call_async(goal_req)
-        #     rclpy.spin_until_future_complete(self, future)
-        #
-        #     # remove the goal task that was just complete
-        #     self.robots_and_goals.pop(0)
+        for task in self.tasks:
+            self.send_request(task.goal_id)
 
+            task_agent = self.get_object_by_id(self.agents, task.agent_id)
+            task_goal = self.get_object_by_id(self.goals, task.goal_id)
+            if task_agent is None or task_goal is None:
+                self.get_logger().warn('Could not set active task to false!')
+                continue
+
+            # reset active to false
+            # TODO: Need to make this work with actions so that it 
+            # removes task when robot has actually competed it
+            task_agent.active = False
+            task_goal.active = False
+
+            # add tasks to completed list
+            complete_tasks.append(task)
+
+        for task in complete_tasks:
+            self.get_logger().info(f'Removing {task}')
+            self.tasks.remove(task)
+            
+        self.get_logger().info(f'Currently has: {len(self.tasks)} active tasks')
 
 
 def main(args = None) -> None:
