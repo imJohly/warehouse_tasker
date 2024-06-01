@@ -20,7 +20,7 @@ def generate_launch_description():
     y_pose = LaunchConfiguration('y_pose', default='0.0')
 
     world = os.path.join(
-        get_package_share_directory('warehouse_tasker'),
+        pkg_warehouse_tasker,
         'worlds',
         'warehouse_world.world'
     )
