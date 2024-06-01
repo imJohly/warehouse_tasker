@@ -42,20 +42,19 @@ class MissionNode(Node):
         # TODO: make this work with multiple agent clients
         self.agent_goal_client = self.create_client(SendGoal, 'send_goal')
 
-        # initialisation
-        self.initialise_goals(number_of_goals)
 
+        self.initialise_goals(number_of_goals)
         self.loop_timer = self.create_timer(1.0, self.loop)
 
 # ----------------------------------------------------------------------------
 
-    def send_task_callback(self, request, response):
-        requested_agent = next((agent for agent in self.agents if agent.id == str(request.robot)), None)
+    def send_task_callback(self, request: SendTask.Request, response: SendTask.Response):
+        requested_agent = next((agent for agent in self.agents if agent.id == str(request.agent)), None)
         requested_goal = next((goal for goal in self.goals if goal.id == str(request.goal)), None)
 
         # TODO: need to change service to use a string type for namespaces
         if requested_agent is None:
-            self.get_logger().warn(f'Incoming task rejected: Non-existent agent {request.robot}!')
+            self.get_logger().warn(f'Incoming task rejected: Non-existent agent {request.agent}!')
             response.success = False
             return response
 
@@ -65,7 +64,7 @@ class MissionNode(Node):
             return response
 
         if requested_agent.active:
-            self.get_logger().warn(f'Incoming task rejected: Agent {request.robot} is currently active!')
+            self.get_logger().warn(f'Incoming task rejected: Agent {request.agent} is currently active!')
             response.success = False
             return response
 
@@ -86,16 +85,16 @@ class MissionNode(Node):
             goal_id=requested_goal.id
         )
         self.tasks.append(new_task)
-        self.get_logger().info(f'Incoming task: Robot {request.robot} to Goal {request.goal}')
+        self.get_logger().info(f'Incoming task: Robot {request.agent} to Goal {request.goal}')
 
         response.success = True
         return response
 
     # TODO: add a part that adds a client to a list to keep track of them
-    def registration_callback(self, request, response):
+    def registration_callback(self, request: Register.Request, response: Register.Response):
         """Agent registration callback function"""
-        self.agents.append(ObjectData(id=request.robot_name, active=False))
-        self.get_logger().info(f'Registered agent {request.robot_name}')
+        self.agents.append(ObjectData(id=request.id, active=False))
+        self.get_logger().info(f'Registered agent {request.id}')
 
         response.success = True
         return response
@@ -125,7 +124,8 @@ class MissionNode(Node):
         future = self.agent_goal_client.call_async(goal_req)
         return future.result()
 
-    def get_marker_transform(self, index):
+    def get_marker_transform(self, index) -> TransformStamped:
+        """Gets the transform of a given marker index"""
         try:
             transform: TransformStamped = self.tf_buffer.lookup_transform(
                 target_frame='map',
@@ -141,6 +141,7 @@ class MissionNode(Node):
             return TransformStamped()
 
     def get_object_by_id(self, object_list: list[ObjectData], id: str) -> ObjectData | None:
+        """Find and return an object in a list by it's ID"""
         return next((object for object in object_list if object.id == id), None)
 
     def loop(self) -> None:
