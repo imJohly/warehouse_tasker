@@ -1,7 +1,7 @@
-import argparse
 import math
 
 from enum import Enum
+import time
 
 import rclpy
 from rclpy.action import ActionClient
@@ -9,10 +9,10 @@ from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 
-from geometry_msgs.msg import Pose, PoseStamped
+from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 
-# from nav2_msgs.action import ComputePathToPose
+from nav2_msgs.action import ComputePathToPose
 from nav2_msgs.action import NavigateToPose
 from std_srvs.srv import SetBool
 
@@ -25,22 +25,22 @@ class State(Enum):
 
 class AgentNode(Node):
     def __init__(self) -> None:
-        super().__init__('agent_node')
+        super().__init__(node_name='agent_node')
 
+        self.compute_goal: PoseStamped | None = None
         self.active_goal: PoseStamped | None = None
         self.state: State = State.STANDBY
 
         # Action Clients
-        # TODO: Add back in the compute path for multi-robot things
-        # self._compute_action_client = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
-        # self.compute_feedback = ComputePathToPose.Feedback()
-        
-        self._nav_action_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-        self._nav_feedback: NavigateToPose.Feedback | None = None
-        self.nav_is_complete = False
+        self._compute_action_client = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
+        self.path_length: float     = 0.0
+
+        self._nav_action_client     = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        self.nav_is_complete: bool  = False
 
         # Services
-        self.goal_service = self.create_service(SendGoal, 'send_goal', self.goal_service_callback)
+        self.goal_service           = self.create_service(SendGoal, 'send_goal', self.nav_goal_callback)
+        self.compute_path_service   = self.create_service(SendGoal, 'compute_path_length', self.compute_path_length_callback)
 
         # Service Clients
         self.registration_client    = self.create_client(Register, '/register_agent')
@@ -59,7 +59,7 @@ class AgentNode(Node):
 
     def register_agent(self, name):
         while not self.registration_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn('/register_agent service not available, waiting again...')
+            self.get_logger().warn(f'{self.registration_client.srv_name} service not available, waiting again...')
         register_req = Register.Request()
         register_req.id = name
 
@@ -71,7 +71,7 @@ class AgentNode(Node):
 
     def activate_payload_mechanism(self):
         while not self.door_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn('/open_door service not available, waiting again...')
+            self.get_logger().warn(f'{self.door_client.srv_name} service not available, waiting again...')
         payload_req = SetBool.Request()
         payload_req.data = True
 
@@ -83,7 +83,31 @@ class AgentNode(Node):
 
 # -------------------------------------------------------------------------------------------
 
-    def goal_service_callback(self, request, response):
+    def compute_path_length_callback(self, request: SendGoal.Request, response: SendGoal.Response):
+        self.compute_goal = PoseStamped()
+        self.compute_goal.header.frame_id = 'map'
+        self.compute_goal.pose.orientation.w = 1.0
+
+        self.compute_goal.pose.position.x = request.x
+        self.compute_goal.pose.position.y = request.y
+
+        self.get_logger().info(f'Received goal locations - x: {request.x}, y: {request.y}')
+
+        # TODO: Check what state the robot should be when computing path length
+        self.state = State.STANDBY
+
+        # force the action to start
+        if self.compute_goal is not None:
+            self.get_logger().info('Sending nav goal...')
+            self.send_compute_goal(self.compute_goal)
+            self.compute_goal = None
+
+        # FIX: Needs to send back a service call to mission node to receive path length once it is computed
+
+        response.success = True
+        return response
+
+    def nav_goal_callback(self, request: SendGoal.Request, response: SendGoal.Response):
         self.active_goal = PoseStamped()
         self.active_goal.header.frame_id = 'map'
         self.active_goal.pose.orientation.w = 1.0
@@ -91,7 +115,7 @@ class AgentNode(Node):
         self.active_goal.pose.position.x = request.x
         self.active_goal.pose.position.y = request.y
 
-        self.get_logger().info(f'Received goal locations - x: {request.x}, y: {request.y}')
+        self.get_logger().info(f'Receive goal locations - x: {request.x}, y: {request.y}')
         self.state = State.ACTIVE
 
         response.success = True
@@ -99,33 +123,38 @@ class AgentNode(Node):
 
 # -------------------------------------------------------------------------------------------
 
-    # def send_compute_goal(self, goal: PoseStamped):
-    #     goal_msg = ComputePathToPose.Goal()
-    #     goal_msg.goal = goal
-    #
-    #     self._compute_action_client.wait_for_server()
-    #
-    #     self._send_compute_goal_future = self._compute_action_client.send_goal_async(goal_msg)
-    #     self._send_compute_goal_future.add_done_callback(self.compute_goal_response_callback)
-    #
-    # def compute_goal_response_callback(self, future):
-    #     goal_handle = future.result()
-    #     if not goal_handle.accepted:
-    #         self.get_logger().info('Goal rejected :(')
-    #         return
-    #
-    #     self.get_logger().info('Goal accepted :)')
-    #
-    #     self._get_compute_result_future = goal_handle.get_result_async()
-    #     self._get_compute_result_future.add_done_callback(self.get_compute_result_callback)
-    #
-    # def get_compute_result_callback(self, future):
-    #     result = future.result().result
-    #     self.get_logger().info(f'Result: {len(result.path.poses)}')
-    #     self.get_logger().info(f'Path Length: {self.calculate_path_distance(result.path)}')
-    #     
-    #     time.sleep(0.5)
-    #     return result
+    def send_compute_goal(self, goal: PoseStamped):
+        goal_msg = ComputePathToPose.Goal()
+        goal_msg.goal = goal
+
+        self._compute_action_client.wait_for_server()
+
+        self._send_compute_goal_handle = self._compute_action_client.send_goal_async(
+            goal_msg, feedback_callback=self.compute_feedback_callback
+        )
+        self._send_compute_goal_handle.add_done_callback(self.compute_goal_response_callback)
+
+    def compute_goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().info('Goal rejected :(')
+            return
+
+        self.get_logger().info('Goal accepted :)')
+        self._get_compute_result_future = goal_handle.get_result_async()
+        self._get_compute_result_future.add_done_callback(self.get_compute_result_callback)
+
+    def get_compute_result_callback(self, future):
+        result: ComputePathToPose.Result = future.result().result
+        self.get_logger().info(f'Result: {len(result.path.poses)}')
+        path_length = self.calculate_path_distance(result.path)
+        self.get_logger().info(f'Computed path length: {path_length}')
+        self.path_length = path_length
+        # TODO: Probably here is where i send a service call as i know it exists here...
+
+    def compute_feedback_callback(self, feedback_msg) -> None:
+        feedback = feedback_msg.feedback
+        self.get_logger().info(f'Feedback: {feedback}')
 
 # -------------------------------------------------------------------------------------------
 
@@ -157,8 +186,8 @@ class AgentNode(Node):
         self.nav_is_complete = True
 
     def nav_feedback_callback(self, feedback_msg) -> None:
-        self._nav_feedback = feedback_msg.feedback
-        self.get_logger().info(f'Distance remaining: {self._nav_feedback.distance_remaining}')
+        feedback = feedback_msg.feedback
+        self.get_logger().info(f'Distance remaining: {feedback.distance_remaining}')
 
 # -------------------------------------------------------------------------------------------
 
@@ -178,6 +207,8 @@ class AgentNode(Node):
     def loop(self) -> None:
         self.get_logger().info(f'Current state is {self.state}, {self.nav_is_complete=}')
 
+        
+
         if self.active_goal is not None:
             self.get_logger().info('Sending nav goal...')
             self.send_nav_goal(self.active_goal)
@@ -189,6 +220,7 @@ class AgentNode(Node):
         # change agent state once action is complete
         match self.state:
             case State.STANDBY:
+                # FIX: This is wrong, needs to send the path distance
                 pass
             case State.ACTIVE:
                 # NOTE: This needs to be run with a working service active
@@ -196,6 +228,7 @@ class AgentNode(Node):
 
                 # TODO: add a wait or create an action_server for the payload_mechanism...
 
+                # TODO: need to get initial pose and set that as the return position
                 self.active_goal = PoseStamped()
                 self.active_goal.header.frame_id = 'map'
                 self.active_goal.pose.position.x = -1.0
@@ -209,7 +242,6 @@ class AgentNode(Node):
                 self.state = State.STANDBY
 
         self.nav_is_complete = False
-
 
 # -------------------------------------------------------------------------------------------
 
