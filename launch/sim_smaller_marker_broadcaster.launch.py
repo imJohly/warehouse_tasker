@@ -13,7 +13,7 @@ def generate_launch_description():
     marker_config = os.path.join(
         package_dir,
         'params',
-        'sim_marker_locations.yaml'
+        'sim_smaller_marker_locations.yaml'
     )
 
     config = {}
