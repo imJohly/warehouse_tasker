@@ -5,11 +5,20 @@ import rclpy
 from rclpy.clock import Time
 from rclpy.duration import Duration
 from rclpy.node import Client, Node
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 
 from tf2_ros import Buffer, TransformListener
 from geometry_msgs.msg import TransformStamped
 
-from warehouse_tasker_interfaces.srv import SendTask, SendTaskAny, Register, SendGoal
+from warehouse_tasker_interfaces.srv import SendPathLength, SendTask, SendTaskAny, Register, SendGoal, GetState
+
+from enum import Enum
+
+class State(Enum):
+    STANDBY: int    = 1
+    ACTIVE: int     = 2
+    RETURNING: int  = 3
 
 @dataclass
 class ObjectData:
@@ -21,6 +30,13 @@ class TaskData:
     id:         int
     agent_id:   str
     goal_id:    str
+    calculated: bool = False
+
+@dataclass
+class PathData:
+    path_length:    float
+    agent_id:       str
+    goal_id:        str
 
 class MissionNode(Node):
     def __init__(self) -> None:
@@ -37,10 +53,14 @@ class MissionNode(Node):
         self.tasks: list[TaskData]      = []
         self.task_count: int            = 0
 
+        self.calculated_paths: list[PathData] = []
+
         # Services
         self.registration_service       = self.create_service(Register, 'register_agent', self.registration_callback)
+        self.state_service              = self.create_service(GetState, 'get_agent_state', self.agent_state_callback)
         self.task_service               = self.create_service(SendTask, 'send_task', self.send_task_callback)
         self.task_any_service           = self.create_service(SendTaskAny, 'send_task_any', self.send_task_any_callback)
+        self.send_path_length_service   = self.create_service(SendPathLength, 'send_path_length', self.send_path_length_callback)
 
         # Clients
         self.agent_compute_goal_clients: list [Client]  = []
@@ -51,7 +71,8 @@ class MissionNode(Node):
         self.listener = TransformListener(self.tf_buffer, self)
 
         self.initialise_goals(self.get_parameter('goal_count').get_parameter_value().integer_value)
-        self.loop_timer = self.create_timer(1.0, self.loop)
+        self.loop_timer = self.create_timer(0.5, self.loop)
+        self.callback_group = ReentrantCallbackGroup()
 
 # ----------------------------------------------------------------------------
 
@@ -64,8 +85,42 @@ class MissionNode(Node):
 
 # ----------------------------------------------------------------------------
 
-    # FIX: Needs to account for multi-robot tasks,
-    # currently works for sending goals to specific agents.
+    def registration_callback(self, request: Register.Request, response: Register.Response):
+        """Agent registration callback function"""
+        self.agents.append(ObjectData(id=request.id))
+
+        # create new clients for registered agent
+        # FIX: Needs to check if it is a valid namespace
+        new_compute_client = self.create_client(SendGoal, f'{request.id}/compute_path_length') 
+        self.agent_compute_goal_clients.append(new_compute_client)
+        self.get_logger().info(f'Registered agent client {new_compute_client.srv_name}')
+        
+        new_nav_client = self.create_client(SendGoal, f'{request.id}/send_goal') 
+        self.agent_nav_goal_clients.append(new_nav_client)
+        self.get_logger().info(f'Registered agent client {new_nav_client.srv_name}')
+
+        self.get_logger().info(f'Registered agent {request.id}')
+
+        response.success = True
+        return response
+
+    def agent_state_callback(self, request: GetState.Request, response: GetState.Response):
+        requested_agent = next((agent for agent in self.agents if agent.id == request.agent), None)
+
+        if requested_agent is None:
+            self.get_logger().warn(f'Incoming state change rejected: Non-existent agent {request.agent}!')
+            response.success = False
+            return response
+
+        # HACK: should probably make this better... 'active' and 'returning' states redundant
+        if request.state == State.STANDBY.value:
+            requested_agent.active = False
+
+        self.get_logger().info(f'Agent {requested_agent.id} of state {request.state} has active set to {requested_agent.active}')
+
+        response.success = True
+        return response
+
     def send_task_any_callback(self, request: SendTaskAny.Request, response: SendTaskAny.Response):
         requested_goal = next((goal for goal in self.goals if goal.id == str(request.goal)), None)
 
@@ -88,14 +143,13 @@ class MissionNode(Node):
         new_task = TaskData(
             id=self.task_count,
             agent_id='',
-            goal_id=requested_goal.id
+            goal_id=requested_goal.id,
         )
         self.tasks.append(new_task)
         self.get_logger().info(f'Incoming task: Goal {request.goal} needs pickup!')
 
         response.success = True
         return response
-
 
     def send_task_callback(self, request: SendTask.Request, response: SendTask.Response):
         """Task callback function"""
@@ -139,21 +193,15 @@ class MissionNode(Node):
         response.success = True
         return response
 
-    def registration_callback(self, request: Register.Request, response: Register.Response):
-        """Agent registration callback function"""
-        self.agents.append(ObjectData(id=request.id))
+    def send_path_length_callback(self, request: SendPathLength.Request, response: SendPathLength.Response):
+        new_path_data = PathData(
+            path_length = request.path_length,
+            agent_id = request.agent,
+            goal_id = request.goal
+        )
 
-        # create new clients for registered agent
-        # FIX: Needs to check if it is a valid namespace
-        new_compute_client = self.create_client(SendGoal, f'{request.id}/compute_path_length') 
-        self.agent_compute_goal_clients.append(new_compute_client)
-        self.get_logger().info(f'Registered agent client {new_compute_client.srv_name}')
-        
-        new_nav_client = self.create_client(SendGoal, f'{request.id}/send_goal') 
-        self.agent_nav_goal_clients.append(new_nav_client)
-        self.get_logger().info(f'Registered agent client {new_nav_client.srv_name}')
-
-        self.get_logger().info(f'Registered agent {request.id}')
+        self.calculated_paths.append(new_path_data)
+        self.get_logger().info(f'Incoming Path Data! New Path length of {new_path_data.path_length}')
 
         response.success = True
         return response
@@ -178,8 +226,11 @@ class MissionNode(Node):
         goal_req.x = marker_tf.transform.translation.x
         goal_req.y = marker_tf.transform.translation.y
 
+        goal_req.goal_id = goal_id
+
         self.get_logger().info(f'Computing path from agent {agent_id} to goal {goal_id}...')
         future = agent_compute_client.call_async(goal_req)
+        # rclpy.spin_until_future_complete(self, future)
         return future.result()
 
     def send_nav_request(self, agent_id: str, goal_id: str):
@@ -199,7 +250,7 @@ class MissionNode(Node):
         goal_req.x = marker_tf.transform.translation.x
         goal_req.y = marker_tf.transform.translation.y
 
-        self.get_logger().info(f'Sending agent to goal {goal_id}')
+        self.get_logger().info(f'Sending agent {agent_id} to goal {goal_id}')
         future = agent_nav_client.call_async(goal_req)
         return future.result()
 
@@ -214,7 +265,7 @@ class MissionNode(Node):
                 time=Time(seconds=0),
                 timeout=Duration(seconds=1),
             )
-            self.get_logger().info(f'Successfully found tf, {transform.transform.translation}')
+            self.get_logger().info(f'Successfully found tf!')
             return transform
 
         except BaseException as e:
@@ -227,38 +278,59 @@ class MissionNode(Node):
 
     def send_agent_to_goal(self, task_agent_id: str, task_goal_id: str) -> None:
         """Function that sends agent to task"""
+
+        if not task_agent_id or not task_goal_id:
+            self.get_logger().warn('Missing agent or goal id, skipping request...')
+            return
+
         self.send_nav_request(task_agent_id, task_goal_id)
 
         # set active to false
         # FIX: Need to make this work with actions so that it 
         # removes task when robot has actually completed it
-        task_agent = self.get_object_by_id(self.agents, task_agent_id)
-        task_goal = self.get_object_by_id(self.goals, task_goal_id)
-        if task_agent is None or task_goal is None:
-            self.get_logger().warn('Could not set active task to false!')
-            return
-        task_agent.active = False
-        task_goal.active = False
 
+# ----------------------------------------------------------------------------
 
     def loop(self) -> None:
+        self.get_logger().info(f'Currently has: {len(self.tasks)} active tasks')
+
         complete_tasks: list[TaskData] = []
-
         free_agents = [agent for agent in self.agents if not agent.active]
-
+        print(free_agents)
         for task in self.tasks:
+
             # check if it is single-robot (in this case, if the first in agents is equal to '')
             # if self.agents[0].id == task.agent_id or task.agent_id != '':
             #     self.send_agent_to_goal(task.agent_id, task.goal_id)
 
-            # else, multi-robot (1: calculate all distances)
-            agents_distance_to_goal: list[float] = []
-            for agent in free_agents:
-                result = self.send_compute_request(agent.id, task.goal_id)
-                self.get_logger().info(f'Result: {result}')
-                # agents_distance_to_goal.append()
+            if not task.calculated:
+                for agent in free_agents:
+                    self.send_compute_request(agent.id, task.goal_id)
+                task.calculated = True
+                continue
 
-            # add tasks to completed list
+            # find the closest with the calculated stuff
+            # TODO: Can try and make this like better by having the path data use a task id
+            relevant_calculations = [pd for pd in self.calculated_paths if pd.goal_id == task.goal_id]
+
+            shortest_distance = 100.0
+            shortest_pd = None
+            for pd in relevant_calculations:
+                if pd.path_length < shortest_distance:
+                    shortest_distance = pd.path_length
+                    shortest_pd = pd
+
+            if shortest_pd is None:
+                self.get_logger().error('Could not find the closest agent! Skipping task...')
+                continue
+
+            closest_agent = self.get_object_by_id(self.agents, shortest_pd.agent_id)
+            if closest_agent is None:
+                self.get_logger().error('Could not find agent by id! Skipping task...')
+                continue
+
+            closest_agent.active = True
+            self.send_agent_to_goal(shortest_pd.agent_id, shortest_pd.goal_id)
             complete_tasks.append(task)
 
         # FIX: Here would be where a service receives completion notices for all agents
@@ -266,14 +338,15 @@ class MissionNode(Node):
             self.get_logger().info(f'Removing {task}')
             self.tasks.remove(task)
             
-        self.get_logger().info(f'Currently has: {len(self.tasks)} active tasks')
 
 
 def main(args = None) -> None:
     rclpy.init(args = args)
 
     node = MissionNode()
-    rclpy.spin(node)
+
+    executor = MultiThreadedExecutor()
+    rclpy.spin(node, executor=executor)
 
     node.destroy_node()
     rclpy.shutdown()

@@ -1,8 +1,5 @@
 import math
 
-from enum import Enum
-import time
-
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
@@ -16,12 +13,14 @@ from nav2_msgs.action import ComputePathToPose
 from nav2_msgs.action import NavigateToPose
 from std_srvs.srv import SetBool
 
-from warehouse_tasker_interfaces.srv import SendGoal, Register
+from warehouse_tasker_interfaces.srv import SendGoal, Register, SendPathLength, GetState
+
+from enum import Enum
 
 class State(Enum):
-    STANDBY     = 1
-    ACTIVE      = 2
-    RETURNING   = 3
+    STANDBY: int    = 1
+    ACTIVE: int     = 2
+    RETURNING: int  = 3
 
 class AgentNode(Node):
     def __init__(self) -> None:
@@ -29,55 +28,90 @@ class AgentNode(Node):
 
         self.compute_goal: PoseStamped | None = None
         self.active_goal: PoseStamped | None = None
-        self.state: State = State.STANDBY
+        self.state                      = State.STANDBY
 
         # Action Clients
-        self._compute_action_client = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
-        self.path_length: float     = 0.0
+        self._compute_action_client     = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
+        self.path_length: float | None  = None
 
-        self._nav_action_client     = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-        self.nav_is_complete: bool  = False
+        self._nav_action_client         = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        self.nav_is_complete: bool      = False
 
         # Services
-        self.goal_service           = self.create_service(SendGoal, 'send_goal', self.nav_goal_callback)
-        self.compute_path_service   = self.create_service(SendGoal, 'compute_path_length', self.compute_path_length_callback)
+        self.goal_service               = self.create_service(SendGoal, 'send_goal', self.nav_goal_callback)
+        self.compute_path_service       = self.create_service(SendGoal, 'compute_path_length', self.compute_path_length_callback)
 
         # Service Clients
-        self.registration_client    = self.create_client(Register, '/register_agent')
-        self.door_client            = self.create_client(SetBool, 'open_door')
+        self.registration_client        = self.create_client(Register, '/register_agent')
+        self.state_client               = self.create_client(GetState, '/get_agent_state')
+        self.send_path_length_client    = self.create_client(SendPathLength, '/send_path_length')
+        self.door_client                = self.create_client(SetBool, 'open_door')
 
         # Register agent to mission node
-        if self.get_namespace() == '/':
-            self.register_agent('')
-        else:
-            self.register_agent(self.get_namespace())
+        self.namespace: str             = self.get_namespace() if not self.get_namespace == '/' else ''
+        print(f'{self.namespace=}')
+        self.register_agent(self.namespace)
 
         self.loop_timer = self.create_timer(0.5, self.loop)
         self.callback_group = ReentrantCallbackGroup()
 
 # -------------------------------------------------------------------------------------------
 
-    def register_agent(self, name):
+    def register_agent(self, name: str):
         while not self.registration_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn(f'{self.registration_client.srv_name} service not available, waiting again...')
-        register_req = Register.Request()
-        register_req.id = name
+
+        req = Register.Request()
+
+        req.id = name
 
         self.get_logger().info(f'Registering agent {name}')
 
-        future = self.registration_client.call_async(register_req)
+        future = self.registration_client.call_async(req)
         rclpy.spin_until_future_complete(self, future)
+        return future.result()
+
+    def send_state(self, state: State):
+        while not self.state_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn(f'{self.state_client.srv_name} service not available, waiting again...')
+
+        req = GetState.Request()
+
+        req.agent = self.namespace
+        req.state = state.value
+
+        self.get_logger().info(f'Sending agent state: {self.state}')
+
+        # FIX: future result currently causes a deadlock...
+        future = self.state_client.call_async(req)
+        return future.result()        
+
+    def send_path_length(self, path_length: float):
+        while not self.send_path_length_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn(f'{self.send_path_length_client.srv_name} service not available, waiting again...')
+
+        req = SendPathLength.Request()
+
+        req.path_length = path_length
+        req.agent = self.namespace
+        req.goal = self.goal_id
+
+        self.get_logger().info(f'Sending path length of: {path_length}')
+
+        # FIX: future result currently causes a deadlock...
+        future = self.send_path_length_client.call_async(req)
         return future.result()
 
     def activate_payload_mechanism(self):
         while not self.door_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn(f'{self.door_client.srv_name} service not available, waiting again...')
-        payload_req = SetBool.Request()
-        payload_req.data = True
+        req = SetBool.Request()
+        req.data = True
 
         self.get_logger().info(f'Calling service to payload mechanism...')
 
-        future = self.door_client.call_async(payload_req)
+        #:FIX: this may be cause for a deadlock...
+        future = self.door_client.call_async(req)
         rclpy.spin_until_future_complete(self, future)
         return future.result()
 
@@ -91,18 +125,12 @@ class AgentNode(Node):
         self.compute_goal.pose.position.x = request.x
         self.compute_goal.pose.position.y = request.y
 
+        self.goal_id = request.goal_id
+
         self.get_logger().info(f'Received goal locations - x: {request.x}, y: {request.y}')
 
         # TODO: Check what state the robot should be when computing path length
         self.state = State.STANDBY
-
-        # force the action to start
-        if self.compute_goal is not None:
-            self.get_logger().info('Sending nav goal...')
-            self.send_compute_goal(self.compute_goal)
-            self.compute_goal = None
-
-        # FIX: Needs to send back a service call to mission node to receive path length once it is computed
 
         response.success = True
         return response
@@ -146,11 +174,16 @@ class AgentNode(Node):
 
     def get_compute_result_callback(self, future):
         result: ComputePathToPose.Result = future.result().result
-        self.get_logger().info(f'Result: {len(result.path.poses)}')
-        path_length = self.calculate_path_distance(result.path)
-        self.get_logger().info(f'Computed path length: {path_length}')
-        self.path_length = path_length
-        # TODO: Probably here is where i send a service call as i know it exists here...
+        if result:
+            self.get_logger().info(f'Result: {len(result.path.poses)}')
+            path_length = self.calculate_path_distance(result.path)
+            self.path_length = path_length
+            self.get_logger().info(f'Computed path length: {path_length}')
+            
+        else:
+            self.get_logger().warn(f'Result: is None!')
+            self.path_length = None
+
 
     def compute_feedback_callback(self, feedback_msg) -> None:
         feedback = feedback_msg.feedback
@@ -205,14 +238,22 @@ class AgentNode(Node):
 # -------------------------------------------------------------------------------------------
 
     def loop(self) -> None:
-        self.get_logger().info(f'Current state is {self.state}, {self.nav_is_complete=}')
+        self.get_logger().info(f'Current state is {self.state}')
 
-        
+        if self.compute_goal is not None:
+            self.get_logger().info('Sending compute goal...')
+            self.send_compute_goal(self.compute_goal)
+            self.compute_goal = None
 
         if self.active_goal is not None:
             self.get_logger().info('Sending nav goal...')
             self.send_nav_goal(self.active_goal)
             self.active_goal = None
+
+        if self.path_length is not None:
+            self.get_logger().info('Sent path length request to mission node')
+            self.send_path_length(self.path_length)
+            self.path_length = None
 
         if not self.nav_is_complete:
             return
@@ -234,6 +275,7 @@ class AgentNode(Node):
                 self.active_goal.pose.position.x = -1.0
                 self.active_goal.pose.position.y = -3.0
                 self.active_goal.pose.orientation.w = 1.0
+                self.nav_is_complete = False
 
                 self.get_logger().info('Sending a return goal to home...') 
 
@@ -242,6 +284,9 @@ class AgentNode(Node):
                 self.state = State.STANDBY
 
         self.nav_is_complete = False
+        
+        # TODO: Send service call to mission node to tell it has change state??? or topic.
+        self.send_state(self.state)
 
 # -------------------------------------------------------------------------------------------
 
