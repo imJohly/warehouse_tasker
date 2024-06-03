@@ -27,6 +27,6 @@ def generate_launch_description():
             parameters=[{
                 'goal_count': goal_count,
             }],
-            remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')]
+            remappings=[('/tf', 'tf')]
         ),
     ])

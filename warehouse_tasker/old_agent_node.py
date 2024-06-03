@@ -92,7 +92,7 @@ class AgentNode(Node):
     # HACK: May be able to subscribe to an initial pose topic, but does not right now.
     def get_initial_pose(self):
         self.get_logger().info('Finding initial pose...')
-        transform = self.get_transform_from_map('odom')
+        transform = self.get_transform_from_map('map', 'base_footprint')
         if transform is None:
             self.get_logger().warn('Could not find tf base_footprint. Trying again...')
             return
@@ -266,11 +266,11 @@ class AgentNode(Node):
 
         return path_distance
 
-    def get_transform_from_map(self, source_frame: str) -> TransformStamped | None:
+    def get_transform_from_map(self, target_frame: str, source_frame: str) -> TransformStamped | None:
         """Gets the transform of a given source frame in reference to the map frame."""
         try:
             transform: TransformStamped = self.tf_buffer.lookup_transform(
-                target_frame='map',
+                target_frame=f'{target_frame}',
                 source_frame=f'{source_frame}',
                 time=Time(seconds=0),
                 timeout=Duration(seconds=0.5),
@@ -284,7 +284,7 @@ class AgentNode(Node):
 
     def get_marker_transform(self, index) -> TransformStamped | None:
         """Gets the transform of a given marker index."""
-        return self.get_transform_from_map(f'marker{index}')
+        return self.get_transform_from_map('map', f'marker{index}')
 
 # -------------------------------------------------------------------------------------------
 
@@ -346,6 +346,10 @@ class AgentNode(Node):
                 if not self.nav_is_complete:
                     return
                     
+                # HACK: after complete, just reset goals. Could be good to have a cooldown that clears goals after a certain amount of time...
+                for goal in self.goals:
+                    goal.active = False
+
                 self.get_logger().info('Changing state from RETURNING to STANDBY!')
                 self.state = State.STANDBY
 
