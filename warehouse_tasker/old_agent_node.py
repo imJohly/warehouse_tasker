@@ -2,6 +2,7 @@ import math
 
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.clock import Time, Duration
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -13,18 +14,36 @@ from nav2_msgs.action import ComputePathToPose
 from nav2_msgs.action import NavigateToPose
 from std_srvs.srv import SetBool
 
-from warehouse_tasker_interfaces.srv import SendGoal, Register, SendPathLength, GetState
+from tf2_ros import Buffer, TransformListener, transform_listener
+from geometry_msgs.msg import TransformStamped
+
+from warehouse_tasker_interfaces.srv import SendGoal, Register, SendTask
 
 from enum import Enum
+from dataclasses import dataclass
 
 class State(Enum):
     STANDBY: int    = 1
     ACTIVE: int     = 2
     RETURNING: int  = 3
 
+@dataclass
+class ObjectData:
+    id:         str
+    active:     bool = False
+
 class AgentNode(Node):
     def __init__(self) -> None:
         super().__init__(node_name='agent_node')
+
+        # ROS parameter declaration
+        self.declare_parameter('goal_count', 16)
+
+        # Object Variables
+        self.initial_pose: PoseStamped | None = None
+
+        self.goals: list[ObjectData]    = []
+        self.tasks: list[str]           = []
 
         self.compute_goal: PoseStamped | None = None
         self.active_goal: PoseStamped | None = None
@@ -38,69 +57,78 @@ class AgentNode(Node):
         self.nav_is_complete: bool      = False
 
         # Services
-        self.goal_service               = self.create_service(SendGoal, 'send_goal', self.nav_goal_callback)
+        self.task_service               = self.create_service(SendTask, 'send_task', self.send_task_callback)
+        # self.goal_service               = self.create_service(SendGoal, 'send_goal', self.nav_goal_callback)
         self.compute_path_service       = self.create_service(SendGoal, 'compute_path_length', self.compute_path_length_callback)
 
         # Service Clients
         self.registration_client        = self.create_client(Register, '/register_agent')
-        self.state_client               = self.create_client(GetState, '/get_agent_state')
-        self.send_path_length_client    = self.create_client(SendPathLength, '/send_path_length')
         self.door_client                = self.create_client(SetBool, 'open_door')
 
+        # Transform buffer and listener to get marker tfs
+        self.tf_buffer = Buffer()
+        self.listener = TransformListener(self.tf_buffer, self)
+
         # Register agent to mission node
-        self.namespace: str             = self.get_namespace() if not self.get_namespace == '/' else ''
-        print(f'{self.namespace=}')
-        self.register_agent(self.namespace)
+        # self.namespace: str             = self.get_namespace() if not self.get_namespace == '/' else ''
+        # print(f'{self.namespace=}')
+        # self.register_agent(self.namespace)
+
+        self.initialise_goals(self.get_parameter('goal_count').get_parameter_value().integer_value)
+        self.get_initial_pose()
 
         self.loop_timer = self.create_timer(0.5, self.loop)
         self.callback_group = ReentrantCallbackGroup()
 
 # -------------------------------------------------------------------------------------------
+    
+    def initialise_goals(self, number_of_goals: int) -> None:
+        """Initialises goals"""
+        for goal_index in range(number_of_goals):
+            self.goals.append(ObjectData(id=str(goal_index)))
 
-    def register_agent(self, name: str):
-        while not self.registration_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn(f'{self.registration_client.srv_name} service not available, waiting again...')
+        self.get_logger().info(f'Initialised {number_of_goals} goals.')
 
-        req = Register.Request()
+    # def register_agent(self, name: str):
+    #     while not self.registration_client.wait_for_service(timeout_sec=1.0):
+    #         self.get_logger().warn(f'{self.registration_client.srv_name} service not available, waiting again...')
+    #
+    #     req = Register.Request()
+    #
+    #     req.id = name
+    #
+    #     self.get_logger().info(f'Registering agent {name}')
+    #
+    #     future = self.registration_client.call_async(req)
+    #     rclpy.spin_until_future_complete(self, future)
+    #     return future.result()
 
-        req.id = name
+    # HACK: May be able to subscribe to an initial pose topic, but does not right now.
+    def get_initial_pose(self):
+        # self.attempts = 0
+        # while self.initial_pose is None and self.attempts < 11:
+        #     if self.attempts == 10:
+        #         self.get_logger().error('Could not find tf. Shutting down...')
+        #         rclpy.shutdown()
 
-        self.get_logger().info(f'Registering agent {name}')
+        self.get_logger().info('Finding initial pose...')
+        transform = self.get_transform_from_map('odom')
+        if transform is None:
+            self.get_logger().warn('Could not find tf base_footprint. Trying again...')
+            # self.attempts += 1
+            # continue
+            return
 
-        future = self.registration_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-        return future.result()
-
-    def send_state(self, state: State):
-        while not self.state_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn(f'{self.state_client.srv_name} service not available, waiting again...')
-
-        req = GetState.Request()
-
-        req.agent = self.namespace
-        req.state = state.value
-
-        self.get_logger().info(f'Sending agent state: {self.state}')
-
-        # FIX: future result currently causes a deadlock...
-        future = self.state_client.call_async(req)
-        return future.result()        
-
-    def send_path_length(self, path_length: float):
-        while not self.send_path_length_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn(f'{self.send_path_length_client.srv_name} service not available, waiting again...')
-
-        req = SendPathLength.Request()
-
-        req.path_length = path_length
-        req.agent = self.namespace
-        req.goal = self.goal_id
-
-        self.get_logger().info(f'Sending path length of: {path_length}')
-
-        # FIX: future result currently causes a deadlock...
-        future = self.send_path_length_client.call_async(req)
-        return future.result()
+        self.initial_pose = PoseStamped()
+        self.initial_pose.header.frame_id = 'map'
+        self.initial_pose.pose.position.x = transform.transform.translation.x
+        self.initial_pose.pose.position.y = transform.transform.translation.y
+        self.initial_pose.pose.position.z = transform.transform.translation.z
+        self.initial_pose.pose.orientation.x = transform.transform.rotation.x
+        self.initial_pose.pose.orientation.y = transform.transform.rotation.y
+        self.initial_pose.pose.orientation.z = transform.transform.rotation.z
+        self.initial_pose.pose.orientation.w = transform.transform.rotation.w
+        self.get_logger().info('Found initial pose!')
 
     def activate_payload_mechanism(self):
         while not self.door_client.wait_for_service(timeout_sec=1.0):
@@ -110,24 +138,20 @@ class AgentNode(Node):
 
         self.get_logger().info(f'Calling service to payload mechanism...')
 
-        #:FIX: this may be cause for a deadlock...
         future = self.door_client.call_async(req)
+        # FIX: this may be cause for a deadlock...
         rclpy.spin_until_future_complete(self, future)
         return future.result()
 
 # -------------------------------------------------------------------------------------------
 
     def compute_path_length_callback(self, request: SendGoal.Request, response: SendGoal.Response):
-        self.compute_goal = PoseStamped()
+        self.compute_goal = request.goal_pose
         self.compute_goal.header.frame_id = 'map'
-        self.compute_goal.pose.orientation.w = 1.0
-
-        self.compute_goal.pose.position.x = request.x
-        self.compute_goal.pose.position.y = request.y
 
         self.goal_id = request.goal_id
 
-        self.get_logger().info(f'Received goal locations - x: {request.x}, y: {request.y}')
+        self.get_logger().info(f'Received goal locations - x: {self.compute_goal.pose.position.x}, y: {self.compute_goal.pose.position.y}')
 
         # TODO: Check what state the robot should be when computing path length
         self.state = State.STANDBY
@@ -136,15 +160,39 @@ class AgentNode(Node):
         return response
 
     def nav_goal_callback(self, request: SendGoal.Request, response: SendGoal.Response):
-        self.active_goal = PoseStamped()
-        self.active_goal.header.frame_id = 'map'
-        self.active_goal.pose.orientation.w = 1.0
+        self.compute_goal = request.goal_pose
+        self.compute_goal.header.frame_id = 'map'
 
-        self.active_goal.pose.position.x = request.x
-        self.active_goal.pose.position.y = request.y
+        self.goal_id = request.goal_id
 
-        self.get_logger().info(f'Receive goal locations - x: {request.x}, y: {request.y}')
+        self.get_logger().info(f'Received goal locations - x: {self.compute_goal.pose.position.x}, y: {self.compute_goal.pose.position.y}')
+
+        # TODO: Check what state the robot should be when computing path length
         self.state = State.ACTIVE
+
+        response.success = True
+        return response
+
+    def send_task_callback(self, request: SendTask.Request, response: SendTask.Response):
+        """Task callback function"""
+        requested_goal = next((goal for goal in self.goals if goal.id == str(request.goal)), None)
+
+        if requested_goal is None:
+            self.get_logger().warn(f'Incoming task rejected: Non-existent goal {request.goal}!')
+            response.success = False
+            return response
+
+        if requested_goal.active:
+            self.get_logger().warn(f'Incoming task rejected: Goal {request.goal} has already been set!')
+            response.success = False
+            return response
+        
+        # set to active for agents and goals
+        requested_goal.active = True
+
+        # add ongoing task to track them
+        self.tasks.append(requested_goal.id)
+        self.get_logger().info(f'Incoming task: Robot to Goal {request.goal}')
 
         response.success = True
         return response
@@ -235,10 +283,32 @@ class AgentNode(Node):
 
         return path_distance
 
+    def get_transform_from_map(self, source_frame: str) -> TransformStamped | None:
+        """Gets the transform of a given source frame in reference to the map frame."""
+        try:
+            transform: TransformStamped = self.tf_buffer.lookup_transform(
+                target_frame='map',
+                source_frame=f'{source_frame}',
+                time=Time(seconds=0),
+                timeout=Duration(seconds=0.5),
+            )
+            self.get_logger().info(f'Successfully found tf!')
+            return transform
+
+        except BaseException as e:
+            self.get_logger().warn(f'Error getting transform: {e}')
+            return None
+
+    def get_marker_transform(self, index) -> TransformStamped | None:
+        """Gets the transform of a given marker index."""
+        return self.get_transform_from_map(f'marker{index}')
+
 # -------------------------------------------------------------------------------------------
 
     def loop(self) -> None:
-        self.get_logger().info(f'Current state is {self.state}')
+        # self.get_logger().info(f'Current state is {self.state}')
+        if self.initial_pose is None:
+            self.get_initial_pose()
 
         if self.compute_goal is not None:
             self.get_logger().info('Sending compute goal...')
@@ -250,44 +320,54 @@ class AgentNode(Node):
             self.send_nav_goal(self.active_goal)
             self.active_goal = None
 
-        if self.path_length is not None:
-            self.get_logger().info('Sent path length request to mission node')
-            self.send_path_length(self.path_length)
-            self.path_length = None
-
-        if not self.nav_is_complete:
-            return
-
-        # change agent state once action is complete
         match self.state:
             case State.STANDBY:
-                # FIX: This is wrong, needs to send the path distance
-                pass
-            case State.ACTIVE:
-                # NOTE: This needs to be run with a working service active
-                # self.activate_payload_mechanism()
+                # HACK: Currently removes tasks immediately
+                if len(self.tasks) == 0:
+                    self.get_logger().warn('Waiting for goal...')
+                    return
 
-                # TODO: add a wait or create an action_server for the payload_mechanism...
+                transform = self.get_marker_transform(self.tasks[0])
+                if transform is None:
+                    self.get_logger().warn('Could not find goal tf. Trying again...')
+                    return
 
-                # TODO: need to get initial pose and set that as the return position
                 self.active_goal = PoseStamped()
                 self.active_goal.header.frame_id = 'map'
-                self.active_goal.pose.position.x = -1.0
-                self.active_goal.pose.position.y = -3.0
-                self.active_goal.pose.orientation.w = 1.0
-                self.nav_is_complete = False
+                self.active_goal.pose.position.x = transform.transform.translation.x
+                self.active_goal.pose.position.y = transform.transform.translation.y
+                self.active_goal.pose.position.z = transform.transform.translation.z
+                self.active_goal.pose.orientation.x = transform.transform.rotation.x
+                self.active_goal.pose.orientation.y = transform.transform.rotation.y
+                self.active_goal.pose.orientation.z = transform.transform.rotation.z
+                self.active_goal.pose.orientation.w = transform.transform.rotation.w
+                self.get_logger().info('Found goal!')
 
-                self.get_logger().info('Sending a return goal to home...') 
+                self.tasks.pop(0)
+                self.state = State.ACTIVE
+            case State.ACTIVE:
+                if not self.nav_is_complete:
+                    return
 
+                # NOTE: This needs to be run with a working service active
+                # TODO: add a wait or create an action_server for the payload_mechanism...
+                # self.activate_payload_mechanism()
+
+                self.active_goal = self.initial_pose
+                self.get_logger().info(f'Sending a return goal to home {self.active_goal}...') 
+
+                self.get_logger().info('Changing state from ACTIVE to RETURNING!')
                 self.state = State.RETURNING
             case State.RETURNING:
+
+                if not self.nav_is_complete:
+                    return
+                    
+                self.get_logger().info('Changing state from RETURNING to STANDBY!')
                 self.state = State.STANDBY
 
         self.nav_is_complete = False
         
-        # TODO: Send service call to mission node to tell it has change state??? or topic.
-        self.send_state(self.state)
-
 # -------------------------------------------------------------------------------------------
 
 def main(args = None) -> None:

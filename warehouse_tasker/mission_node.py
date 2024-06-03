@@ -198,6 +198,7 @@ class MissionNode(Node):
             response.success = False
             return response
 
+        self._task_count += 1
         new_task = TaskData(
             id=self._task_count,
             agent_id=request.agent,
