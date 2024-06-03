@@ -5,7 +5,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
 
-    goal_count = LaunchConfiguration('goal_count')
+    goal_count = LaunchConfiguration('goal_count', default=1)
 
     return LaunchDescription([
         DeclareLaunchArgument(

@@ -17,9 +17,10 @@ from enum import Enum
 
 class State(Enum):
     STANDBY:    int = 1
-    ACTIVE:     int = 2
-    ARRIVED:    int = 3
-    RETURNING:  int = 4
+    COMP_PATH:  int = 2
+    ACTIVE:     int = 3
+    ARRIVED:    int = 4
+    RETURNING:  int = 5
 
 class AgentNode(Node):
     def __init__(self) -> None:
@@ -34,6 +35,8 @@ class AgentNode(Node):
         self._current_goal_id: str | None       = None
         self._agent_state: int                  = State.STANDBY
 
+        self._path_accepted: bool | None        = None
+
         # Action Clients
         self._compute_action_client             = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
         self._computed_path: Path | None        = None
@@ -43,6 +46,7 @@ class AgentNode(Node):
 
         # Services
         self._goal_service                      = self.create_service(SendGoal, 'send_goal', self.send_goal_callback)
+        self._nav_service                       = self.create_service(SetBool, 'start_nav', self.start_nav_callback)
 
         # Service Clients
         self._registration_client   = self.create_client(Register, '/register_agent')
@@ -77,6 +81,8 @@ class AgentNode(Node):
         future = self._registration_client.call_async(req)
         rclpy.spin_until_future_complete(self, future) 
         return future.result()
+
+    # FIX: PLEASE CHECK IF THESE ARE ALLOWED TO SPIN UNTIL FUTURE COMPLETE, AS THESE ARE RUN IN MAIN LOOP!
 
     def open_door(self):
         self.get_logger().warn(f'Waiting for {self._door_client.srv_name}...')
@@ -129,6 +135,11 @@ class AgentNode(Node):
         response.success = True
         return response
 
+    def start_nav_callback(self, request: SetBool.Request, response: SetBool.Response):
+        self._path_accepted = request.data
+        response.success = True
+        return response
+
 # -------------------------------------------------------------------------------------------
 
     # NOTE: ACTION CLIENT
@@ -159,7 +170,7 @@ class AgentNode(Node):
     def get_compute_result_callback(self, future):
         result: ComputePathToPose.Result = future.result().result
         if result:
-            self.get_logger().info(f'Result: {len(result.path.poses)}')
+            self.get_logger().info(f'Resulting path poses: {len(result.path.poses)}')
             self._computed_path = result.path
         else:
             self.get_logger().warn(f'Result: is None!')
@@ -227,26 +238,38 @@ class AgentNode(Node):
 
         return path_distance
 
+    def reset_state(self) -> None:
+        self._agent_state       = State.STANDBY
+        self._current_goal      = None
+        self._current_goal_id   = None
+        self._path_accepted     = False
+        self._nav_is_complete   = False
+
 # -------------------------------------------------------------------------------------------
 
     def main_loop(self) -> None:
         # self.get_logger().info(f'Current agent state is set to {self._agent_state}')
 
+        if self._current_goal is None:
+            self.get_logger().warn(f'No goal set, awaiting new goal...')
+            return
+        
+        if self._current_goal_id is None:
+            self.get_logger().warn(f'No goal ID set, check goal is set correctly. Standing by...')
+            return
+
         # TODO: Test states correctly transition...
         match self._agent_state:
             case State.STANDBY:
-                if self._current_goal is None:
-                    self.get_logger().warn(f'No goal set, standing by for new goal...')
-                    return
-                
-                if self._current_goal_id is None:
-                    self.get_logger().warn(f'No goal ID set, check goal is set correctly. Standing by...')
-                    return
-    
                 self.get_logger().info(f'Computing path to goal...')
                 self.start_compute_goal_action(self._current_goal)
+                
+                self._agent_state = State.COMP_PATH
+                self.get_logger().info('Computing path. Changing state from STANDBY to COMP_PATH!')
 
+            case State.COMP_PATH:
                 if self._computed_path is None:
+                    self.get_logger().warn('Computed path is None! Trying Again...')
                     return
 
                 self.get_logger().info(f'Sending path distance to mission...')
@@ -259,9 +282,18 @@ class AgentNode(Node):
                 if not ok:
                     self.get_logger().error('Failed to send path distance to mission node! Trying again...')
                     return
+
+                if self._path_accepted is None:
+                    self.get_logger().info('Waiting for response from Mission node...')
+                    return
+
+                if not self._path_accepted:
+                    self.get_logger().info('Mission node rejected path. Resetting state to STANDBY...')
+                    self.reset_state()
+                    return
                 
                 self._agent_state = State.ACTIVE
-                self.get_logger().info('Changing state from STANDBY to ACTIVE!')
+                self.get_logger().info('Mission node accepted path. Changing state from COMP_PATH to ACTIVE!')
                 
             case State.ACTIVE:
                 if self._current_goal is None:

@@ -43,7 +43,6 @@ class MissionNode(Node):
         super().__init__('mission_node')
         
         # ROS parameter declaration
-        # NOTE: This can only be changed in launch, currently defaults correctly for sim world.
         self.declare_parameter('goal_count', 16)
 
         # Object variables
@@ -288,6 +287,11 @@ class MissionNode(Node):
         # set active to false
         # FIX: Need to make this work with actions so that it 
         # removes task when robot has actually completed it
+        requested_goal = self.get_object_by_id(self.goals, task_goal_id)
+        if requested_goal is None:
+            self.get_logger().info('Could not find goal to set ...')
+            return
+        requested_goal.active = False
 
 # ----------------------------------------------------------------------------
 
