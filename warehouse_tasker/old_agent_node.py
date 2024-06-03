@@ -57,7 +57,7 @@ class AgentNode(Node):
         self.nav_is_complete: bool      = False
 
         # Services
-        self.task_service               = self.create_service(SendTask, 'send_task', self.send_task_callback)
+        self.task_service               = self.create_service(SendTask, '/send_task', self.send_task_callback)
         # self.goal_service               = self.create_service(SendGoal, 'send_goal', self.nav_goal_callback)
         self.compute_path_service       = self.create_service(SendGoal, 'compute_path_length', self.compute_path_length_callback)
 
@@ -70,14 +70,14 @@ class AgentNode(Node):
         self.listener = TransformListener(self.tf_buffer, self)
 
         # Register agent to mission node
-        # self.namespace: str             = self.get_namespace() if not self.get_namespace == '/' else ''
-        # print(f'{self.namespace=}')
+        self.namespace: str = self.get_namespace() if self.get_namespace != '/' else ''
+        self.get_logger().info(f'Agent ID set to: {self.namespace}')
         # self.register_agent(self.namespace)
 
         self.initialise_goals(self.get_parameter('goal_count').get_parameter_value().integer_value)
         self.get_initial_pose()
 
-        self.loop_timer = self.create_timer(0.5, self.loop)
+        self.loop_timer = self.create_timer(0.1, self.loop)
         self.callback_group = ReentrantCallbackGroup()
 
 # -------------------------------------------------------------------------------------------
@@ -89,34 +89,12 @@ class AgentNode(Node):
 
         self.get_logger().info(f'Initialised {number_of_goals} goals.')
 
-    # def register_agent(self, name: str):
-    #     while not self.registration_client.wait_for_service(timeout_sec=1.0):
-    #         self.get_logger().warn(f'{self.registration_client.srv_name} service not available, waiting again...')
-    #
-    #     req = Register.Request()
-    #
-    #     req.id = name
-    #
-    #     self.get_logger().info(f'Registering agent {name}')
-    #
-    #     future = self.registration_client.call_async(req)
-    #     rclpy.spin_until_future_complete(self, future)
-    #     return future.result()
-
     # HACK: May be able to subscribe to an initial pose topic, but does not right now.
     def get_initial_pose(self):
-        # self.attempts = 0
-        # while self.initial_pose is None and self.attempts < 11:
-        #     if self.attempts == 10:
-        #         self.get_logger().error('Could not find tf. Shutting down...')
-        #         rclpy.shutdown()
-
         self.get_logger().info('Finding initial pose...')
         transform = self.get_transform_from_map('odom')
         if transform is None:
             self.get_logger().warn('Could not find tf base_footprint. Trying again...')
-            # self.attempts += 1
-            # continue
             return
 
         self.initial_pose = PoseStamped()
@@ -176,6 +154,11 @@ class AgentNode(Node):
     def send_task_callback(self, request: SendTask.Request, response: SendTask.Response):
         """Task callback function"""
         requested_goal = next((goal for goal in self.goals if goal.id == str(request.goal)), None)
+
+        if request.agent != self.namespace:
+            self.get_logger().warn(f'Ingnoring unrelated task...')
+            response.success = False
+            return response
 
         if requested_goal is None:
             self.get_logger().warn(f'Incoming task rejected: Non-existent goal {request.goal}!')
