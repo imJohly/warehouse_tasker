@@ -137,7 +137,7 @@ def generate_launch_description():
                 PythonLaunchDescriptionSource(os.path.join(bringup_dir, 
                                                             'launch', 
                                                             'nav2_bringup',
-                                                            'rviz_launch_alternate.py')), #CUNT WHY WON"T YOU FUCKING WORK
+                                                            'rviz_launch.py')),
                 condition=IfCondition(use_rviz),
                 launch_arguments={
                                   'namespace': TextSubstitution(text=robot['name']),
