@@ -90,7 +90,7 @@ def generate_launch_description():
         executable='map_server',
         name='map_server',
         output='screen',
-        parameters=[{'yaml_filename': os.path.join(get_package_share_directory('warehouse_tasker'), 'map', 'map_redux.yaml'),
+        parameters=[{'yaml_filename': os.path.join(get_package_share_directory('warehouse_tasker'), 'map', 'map_real_1.yaml'),
                      },],
         remappings=remappings)
 

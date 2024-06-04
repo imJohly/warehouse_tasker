@@ -118,8 +118,8 @@ class AgentNode(Node):
 
         future = self.door_client.call_async(req)
         # FIX: this may be cause for a deadlock...
-        rclpy.spin_until_future_complete(self, future)
-        return future.result()
+        # rclpy.spin_until_future_complete(self, future)
+        # return future.result()
 
 # -------------------------------------------------------------------------------------------
 
@@ -334,7 +334,7 @@ class AgentNode(Node):
 
                 # NOTE: This needs to be run with a working service active
                 # TODO: add a wait or create an action_server for the payload_mechanism...
-                # self.activate_payload_mechanism()
+                self.activate_payload_mechanism()
 
                 self.active_goal = self.initial_pose
                 self.get_logger().info(f'Sending a return goal to home {self.active_goal}...') 
