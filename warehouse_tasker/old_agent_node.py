@@ -50,8 +50,9 @@ class AgentNode(Node):
         self.state                      = State.STANDBY
 
         # Action Clients
-        self._compute_action_client     = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
+        # self._compute_action_client     = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
         self.path_length: float | None  = None
+        self._distance_left: float | None = None
 
         self._nav_action_client         = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.nav_is_complete: bool      = False
@@ -182,44 +183,44 @@ class AgentNode(Node):
         return response
 
 # -------------------------------------------------------------------------------------------
-
-    def send_compute_goal(self, goal: PoseStamped):
-        goal_msg = ComputePathToPose.Goal()
-        goal_msg.goal = goal
-
-        self._compute_action_client.wait_for_server()
-
-        self._send_compute_goal_handle = self._compute_action_client.send_goal_async(
-            goal_msg, feedback_callback=self.compute_feedback_callback
-        )
-        self._send_compute_goal_handle.add_done_callback(self.compute_goal_response_callback)
-
-    def compute_goal_response_callback(self, future):
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().info('Goal rejected :(')
-            return
-
-        self.get_logger().info('Goal accepted :)')
-        self._get_compute_result_future = goal_handle.get_result_async()
-        self._get_compute_result_future.add_done_callback(self.get_compute_result_callback)
-
-    def get_compute_result_callback(self, future):
-        result: ComputePathToPose.Result = future.result().result
-        if result:
-            self.get_logger().info(f'Result: {len(result.path.poses)}')
-            path_length = self.calculate_path_distance(result.path)
-            self.path_length = path_length
-            self.get_logger().info(f'Computed path length: {path_length}')
-            
-        else:
-            self.get_logger().warn(f'Result: is None!')
-            self.path_length = None
-
-
-    def compute_feedback_callback(self, feedback_msg) -> None:
-        feedback = feedback_msg.feedback
-        self.get_logger().info(f'Feedback: {feedback}')
+    #
+    # def send_compute_goal(self, goal: PoseStamped):
+    #     goal_msg = ComputePathToPose.Goal()
+    #     goal_msg.goal = goal
+    #
+    #     self._compute_action_client.wait_for_server()
+    #
+    #     self._send_compute_goal_handle = self._compute_action_client.send_goal_async(
+    #         goal_msg, feedback_callback=self.compute_feedback_callback
+    #     )
+    #     self._send_compute_goal_handle.add_done_callback(self.compute_goal_response_callback)
+    #
+    # def compute_goal_response_callback(self, future):
+    #     goal_handle = future.result()
+    #     if not goal_handle.accepted:
+    #         self.get_logger().info('Goal rejected :(')
+    #         return
+    #
+    #     self.get_logger().info('Goal accepted :)')
+    #     self._get_compute_result_future = goal_handle.get_result_async()
+    #     self._get_compute_result_future.add_done_callback(self.get_compute_result_callback)
+    #
+    # def get_compute_result_callback(self, future):
+    #     result: ComputePathToPose.Result = future.result().result
+    #     if result:
+    #         self.get_logger().info(f'Result: {len(result.path.poses)}')
+    #         path_length = self.calculate_path_distance(result.path)
+    #         self.path_length = path_length
+    #         self.get_logger().info(f'Computed path length: {path_length}')
+    #         
+    #     else:
+    #         self.get_logger().warn(f'Result: is None!')
+    #         self.path_length = None
+    #
+    #
+    # def compute_feedback_callback(self, feedback_msg) -> None:
+    #     feedback = feedback_msg.feedback
+    #     self.get_logger().info(f'Feedback: {feedback}')
 
 # -------------------------------------------------------------------------------------------
 
@@ -230,10 +231,10 @@ class AgentNode(Node):
         goal_msg.pose = goal
 
         self._nav_action_client.wait_for_server()
-        self._nav_goal_handle = self._nav_action_client.send_goal_async(
+        self._nav_goal_future = self._nav_action_client.send_goal_async(
             goal_msg, feedback_callback=self.nav_feedback_callback
         )
-        self._nav_goal_handle.add_done_callback(self.nav_goal_response_callback)
+        self._nav_goal_future.add_done_callback(self.nav_goal_response_callback)
 
     def nav_goal_response_callback(self, future) -> None:
         goal_handle = future.result()
@@ -242,6 +243,7 @@ class AgentNode(Node):
             return
 
         self.get_logger().info('Goal accepted :)')
+        self._nav_goal_handle = goal_handle  # Store the goal handle
         self._nav_result_future = goal_handle.get_result_async()
         self._nav_result_future.add_done_callback(self.get_nav_result_callback)
 
@@ -253,6 +255,23 @@ class AgentNode(Node):
     def nav_feedback_callback(self, feedback_msg) -> None:
         feedback = feedback_msg.feedback
         self.get_logger().info(f'Distance remaining: {feedback.distance_remaining}')
+        
+        # Check the distance remaining and cancel the goal if it is below a threshold
+        if feedback.distance_remaining < self.get_distance_threshold():
+            self.get_logger().info('Distance threshold reached, canceling goal...')
+            self._nav_action_client.cancel_goal_async(self._nav_goal_handle).add_done_callback(self.cancel_done_callback)
+
+    def cancel_done_callback(self, future) -> None:
+        cancel_response = future.result()
+        if cancel_response.goals_canceling:
+            self.get_logger().info('Goal successfully canceled.')
+        else:
+            self.get_logger().info('Goal cancellation failed.')
+
+    def get_distance_threshold(self):
+        # Define the distance threshold for cancellation
+        return 0.4  # Example threshold in meters
+
 
 # -------------------------------------------------------------------------------------------
 
@@ -330,6 +349,8 @@ class AgentNode(Node):
                 self.tasks.pop(0)
                 self.state = State.ACTIVE
             case State.ACTIVE:
+
+
                 if not self.nav_is_complete:
                     return
 
