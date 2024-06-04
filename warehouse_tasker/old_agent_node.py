@@ -146,7 +146,8 @@ class AgentNode(Node):
         self.get_logger().info(f'Received goal locations - x: {self.compute_goal.pose.position.x}, y: {self.compute_goal.pose.position.y}')
 
         # TODO: Check what state the robot should be when computing path length
-        self.state = State.ACTIVE
+        # FIX: CHANGE THIS IF IT BREAKS
+        # self.state = State.ACTIVE
 
         response.success = True
         return response
@@ -335,6 +336,11 @@ class AgentNode(Node):
                 # NOTE: This needs to be run with a working service active
                 # TODO: add a wait or create an action_server for the payload_mechanism...
                 # self.activate_payload_mechanism()
+
+                if len(self.tasks) > 0:
+                    self.get_logger().info('More tasks left! Continuing to next goals...')
+                    self.state = State.STANDBY
+                    return
 
                 self.active_goal = self.initial_pose
                 self.get_logger().info(f'Sending a return goal to home {self.active_goal}...') 
