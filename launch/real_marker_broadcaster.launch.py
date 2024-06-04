@@ -29,6 +29,19 @@ def generate_launch_description():
                 executable='drop_zone_broadcaster',
                 output='screen',
                 parameters=[{'marker_yaml_path': marker_config,
+                             'marker_index': i}],
+                remappings=[('/tf_static', '/tb1/tf_static')]
+            )
+        )
+
+    marker_nodes = []
+    for i in range(number_of_markers):
+        marker_nodes.append(
+            Node(
+                package='warehouse_tasker',
+                executable='drop_zone_broadcaster',
+                output='screen',
+                parameters=[{'marker_yaml_path': marker_config,
                              'marker_index': i}]
             )
         )
