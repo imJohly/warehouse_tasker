@@ -116,17 +116,17 @@ class VoronoiGrapher:
         kmeans.fit(clipped_endpoints)
         centers = np.round(kmeans.cluster_centers_).astype(int)
 
-        # self.graph_ = self.create_graph(centers, k=4)
+        self.graph_ = self.create_graph(centers, k=4)
 
-        # print(len(self.graph_))
+        print(len(self.graph_))
 
         # visualise connected nodes
-        # for index, tri in enumerate(self.graph):
-        #     cv2.line(distance_field, centers[tri[0]], centers[tri[1]], (255,0,0), 1)
-        #     cv2.line(distance_field, centers[tri[0]], centers[tri[2]], (255,0,0), 1)
-        #     cv2.line(distance_field, centers[tri[1]], centers[tri[2]], (255,0,0), 1)
-        #
-        # cv2.imwrite('processed.jpg', distance_field)
+        for index, tri in enumerate(self.graph_):
+            cv2.line(distance_field, centers[tri[0]], centers[tri[1]], (255,0,0), 1)
+            cv2.line(distance_field, centers[tri[0]], centers[tri[2]], (255,0,0), 1)
+            cv2.line(distance_field, centers[tri[1]], centers[tri[2]], (255,0,0), 1)
+
+        cv2.imwrite('processed.jpg', distance_field)
 
         return centers
 
