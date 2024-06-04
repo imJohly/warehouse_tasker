@@ -32,8 +32,8 @@ def generate_launch_description():
 
     # Names and poses of the robots
     robots = [
-        {'name': 'tb1', 'x_pose': '0.0', 'y_pose': '0.0', 'z_pose': 0.01},
-        {'name': 'tb2', 'x_pose': '1.4', 'y_pose': '0.0', 'z_pose': 0.01},
+        {'name': 'tb1', 'x_pose': '-1.5', 'y_pose': '-0.5', 'z_pose': 0.01},
+        {'name': 'tb2', 'x_pose': '-1.5', 'y_pose': '0.5', 'z_pose': 0.01},
     ]
 
     TURTLEBOT3_MODEL = 'waffle'
@@ -90,7 +90,7 @@ def generate_launch_description():
         executable='map_server',
         name='map_server',
         output='screen',
-        parameters=[{'yaml_filename': os.path.join(get_package_share_directory('warehouse_tasker'), 'map', 'map_redux.yaml'),
+        parameters=[{'yaml_filename': os.path.join(get_package_share_directory('warehouse_tasker'), 'map', 'map_real_2.yaml'),
                      },],
         remappings=remappings)
 
