@@ -4,6 +4,8 @@
 
 A repo for the warehouse task allocation system for a fleet of turtlebots.
 
+See [warehouse_tasker_interfaces](https://github.com/imJohly/warehouse_tasker_interfaces/) for info on the interfaces package.
+
 ## Dependencies
 To properly run this, there a number of dependencies that must be installed first,
 
@@ -55,6 +57,7 @@ First clone this repo through SSH into your ros2 workspace,
 
 ```bash
 cd ~/<your ros2_ws here>/src
+git clone git@github.com:imJohly/warehouse_tasker_interfaces.git
 git clone git@github.com:imJohly/warehouse_tasker.git
 ```
 
@@ -62,7 +65,7 @@ Then build it using colcon and source it from the install directory,
 
 ```bash
 cd ..
-colcon build --packages-select warehouse_tasker --symlink-install
+colcon build --packages-select warehouse_tasker warehouse_tasker_interfaces --symlink-install
 source install/local_setup.bash
 ```
 
