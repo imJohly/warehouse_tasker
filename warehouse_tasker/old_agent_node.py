@@ -256,23 +256,6 @@ class AgentNode(Node):
         feedback = feedback_msg.feedback
         self.get_logger().info(f'Distance remaining: {feedback.distance_remaining}')
         
-        # Check the distance remaining and cancel the goal if it is below a threshold
-        if feedback.distance_remaining < self.get_distance_threshold():
-            self.get_logger().info('Distance threshold reached, canceling goal...')
-            self._nav_action_client.cancel_goal_async(self._nav_goal_handle).add_done_callback(self.cancel_done_callback)
-
-    def cancel_done_callback(self, future) -> None:
-        cancel_response = future.result()
-        if cancel_response.goals_canceling:
-            self.get_logger().info('Goal successfully canceled.')
-        else:
-            self.get_logger().info('Goal cancellation failed.')
-
-    def get_distance_threshold(self):
-        # Define the distance threshold for cancellation
-        return 0.4  # Example threshold in meters
-
-
 # -------------------------------------------------------------------------------------------
 
     def calculate_path_distance(self, path: Path) -> float:
