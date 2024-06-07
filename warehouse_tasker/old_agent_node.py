@@ -50,9 +50,8 @@ class AgentNode(Node):
         self.state                      = State.STANDBY
 
         # Action Clients
-        # self._compute_action_client     = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
+        self._compute_action_client     = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
         self.path_length: float | None  = None
-        self._distance_left: float | None = None
 
         self._nav_action_client         = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.nav_is_complete: bool      = False
@@ -60,7 +59,7 @@ class AgentNode(Node):
         # Services
         self.task_service               = self.create_service(SendTask, '/send_task', self.send_task_callback)
         # self.goal_service               = self.create_service(SendGoal, 'send_goal', self.nav_goal_callback)
-        self.compute_path_service       = self.create_service(SendGoal, 'compute_path_length', self.compute_path_length_callback)
+        # self.compute_path_service       = self.create_service(SendGoal, 'compute_path_length', self.compute_path_length_callback)
 
         # Service Clients
         self.registration_client        = self.create_client(Register, '/register_agent')
@@ -119,8 +118,8 @@ class AgentNode(Node):
 
         future = self.door_client.call_async(req)
         # FIX: this may be cause for a deadlock...
-        rclpy.spin_until_future_complete(self, future)
-        return future.result()
+        # rclpy.spin_until_future_complete(self, future)
+        # return future.result()
 
 # -------------------------------------------------------------------------------------------
 
@@ -147,43 +146,46 @@ class AgentNode(Node):
         self.get_logger().info(f'Received goal locations - x: {self.compute_goal.pose.position.x}, y: {self.compute_goal.pose.position.y}')
 
         # TODO: Check what state the robot should be when computing path length
-        # FIX: CHANGE THIS IF IT BREAKS
-        # self.state = State.ACTIVE
+        self.state = State.ACTIVE
 
         response.success = True
         return response
 
     def send_task_callback(self, request: SendTask.Request, response: SendTask.Response):
         """Task callback function"""
-        requested_goal = next((goal for goal in self.goals if goal.id == str(request.goal)), None)
 
         if request.agent != self.namespace:
             self.get_logger().warn(f'Ingnoring unrelated task...')
             response.success = False
             return response
 
-        if requested_goal is None:
-            self.get_logger().warn(f'Incoming task rejected: Non-existent goal {request.goal}!')
-            response.success = False
-            return response
+        requested_goal = None
+        for goal in request.goal:
+            requested_goal = next((existing_goal for existing_goal in self.goals if existing_goal.id == str(goal)), None)
+            if requested_goal is None:
+                self.get_logger().warn(f'Incoming task rejected: Non-existent goal {goal}!')
+                response.success = False
+                return response
 
-        if requested_goal.active:
-            self.get_logger().warn(f'Incoming task rejected: Goal {request.goal} has already been set!')
-            response.success = False
-            return response
-        
-        # set to active for agents and goals
-        requested_goal.active = True
+            if requested_goal.active:
+                self.get_logger().warn(f'Incoming task rejected: Goal {goal} has already been set!')
+                response.success = False
+                return response
 
-        # add ongoing task to track them
-        self.tasks.append(requested_goal.id)
-        self.get_logger().info(f'Incoming task: Robot to Goal {request.goal}')
+            self.get_logger().info(f'Goal {goal} exists!')
+
+            # set to active for agents and goals
+            requested_goal.active = True
+
+            # add ongoing task to track them
+            self.tasks.append(requested_goal.id)
+            self.get_logger().info(f'Incoming task: Robot to Goal {request.goal}')
 
         response.success = True
         return response
 
 # -------------------------------------------------------------------------------------------
-    #
+
     # def send_compute_goal(self, goal: PoseStamped):
     #     goal_msg = ComputePathToPose.Goal()
     #     goal_msg.goal = goal
@@ -221,7 +223,7 @@ class AgentNode(Node):
     # def compute_feedback_callback(self, feedback_msg) -> None:
     #     feedback = feedback_msg.feedback
     #     self.get_logger().info(f'Feedback: {feedback}')
-
+    #
 # -------------------------------------------------------------------------------------------
 
     def send_nav_goal(self, goal: PoseStamped) -> None:
@@ -231,10 +233,11 @@ class AgentNode(Node):
         goal_msg.pose = goal
 
         self._nav_action_client.wait_for_server()
-        self._nav_goal_future = self._nav_action_client.send_goal_async(
-            goal_msg, feedback_callback=self.nav_feedback_callback
+        self._nav_goal_handle = self._nav_action_client.send_goal_async(
+            # goal_msg, feedback_callback=self.nav_feedback_callback
+            goal_msg
         )
-        self._nav_goal_future.add_done_callback(self.nav_goal_response_callback)
+        self._nav_goal_handle.add_done_callback(self.nav_goal_response_callback)
 
     def nav_goal_response_callback(self, future) -> None:
         goal_handle = future.result()
@@ -243,7 +246,6 @@ class AgentNode(Node):
             return
 
         self.get_logger().info('Goal accepted :)')
-        self._nav_goal_handle = goal_handle  # Store the goal handle
         self._nav_result_future = goal_handle.get_result_async()
         self._nav_result_future.add_done_callback(self.get_nav_result_callback)
 
@@ -252,11 +254,14 @@ class AgentNode(Node):
         self.get_logger().info(f'Result: {result}')
         self.nav_is_complete = True
 
-    def nav_feedback_callback(self, feedback_msg) -> None:
-        feedback = feedback_msg.feedback
-        self.get_logger().info(f'Distance remaining: {feedback.distance_remaining}')
-        
+    # def nav_feedback_callback(self, feedback_msg) -> None:
+        # feedback = feedback_msg.feedback
+        # self.get_logger().info(f'Distance remaining: {feedback.distance_remaining}')
+
 # -------------------------------------------------------------------------------------------
+
+    def calculate_distance(self, curr_pose: PoseStamped, prev_pose: PoseStamped):
+        return math.sqrt((prev_pose.pose.position.x - curr_pose.pose.position.x)**2 + (prev_pose.pose.position.y - curr_pose.pose.position.y)**2)
 
     def calculate_path_distance(self, path: Path) -> float:
         """Calculates the length of a path."""
@@ -278,7 +283,7 @@ class AgentNode(Node):
                 time=Time(seconds=0),
                 timeout=Duration(seconds=0.5),
             )
-            self.get_logger().info(f'Successfully found tf!')
+            self.get_logger().info(f'Successfully found tf {target_frame}, {source_frame}!')
             return transform
 
         except BaseException as e:
@@ -306,6 +311,8 @@ class AgentNode(Node):
             self.send_nav_goal(self.active_goal)
             self.active_goal = None
 
+        self.get_logger().warn(f'Goals: {self.tasks}')
+
         match self.state:
             case State.STANDBY:
                 # HACK: Currently removes tasks immediately
@@ -313,27 +320,63 @@ class AgentNode(Node):
                     self.get_logger().warn('Waiting for goal...')
                     return
 
-                transform = self.get_marker_transform(self.tasks[0])
-                if transform is None:
-                    self.get_logger().warn('Could not find goal tf. Trying again...')
+                # Calculate the linear distance between poses and
+                # pick the closest goal here.
+
+                # Get all goal poses
+                goal_poses = []
+                for task in self.tasks:
+                    transform = self.get_marker_transform(task)
+                    if transform is None:
+                        self.get_logger().warn('Could not find goal tf. Trying again...')
+                        return
+
+                    goal_pose = PoseStamped()
+                    goal_pose.header.frame_id = 'map'
+                    goal_pose.pose.position.x = transform.transform.translation.x
+                    goal_pose.pose.position.y = transform.transform.translation.y
+                    goal_pose.pose.position.z = transform.transform.translation.z
+                    goal_pose.pose.orientation.x = transform.transform.rotation.x
+                    goal_pose.pose.orientation.y = transform.transform.rotation.y
+                    goal_pose.pose.orientation.z = transform.transform.rotation.z
+                    goal_pose.pose.orientation.w = transform.transform.rotation.w
+
+                    goal_poses.append(goal_pose)
+
+                # calculate the distance
+                distances = []
+
+                curr_tf = self.get_transform_from_map('map', 'base_footprint')
+                if curr_tf is None:
+                    self.get_logger().warn('Could not find current tf. Trying again...')
                     return
 
-                self.active_goal = PoseStamped()
-                self.active_goal.header.frame_id = 'map'
-                self.active_goal.pose.position.x = transform.transform.translation.x
-                self.active_goal.pose.position.y = transform.transform.translation.y
-                self.active_goal.pose.position.z = transform.transform.translation.z
-                self.active_goal.pose.orientation.x = transform.transform.rotation.x
-                self.active_goal.pose.orientation.y = transform.transform.rotation.y
-                self.active_goal.pose.orientation.z = transform.transform.rotation.z
-                self.active_goal.pose.orientation.w = transform.transform.rotation.w
-                self.get_logger().info('Found goal!')
+                curr_pose = PoseStamped()
+                curr_pose.header.frame_id =     'map'
+                curr_pose.pose.position.x =     curr_tf.transform.translation.x
+                curr_pose.pose.position.y =     curr_tf.transform.translation.y
+                curr_pose.pose.position.z =     curr_tf.transform.translation.z
+                curr_pose.pose.orientation.x =  curr_tf.transform.rotation.x
+                curr_pose.pose.orientation.y =  curr_tf.transform.rotation.y
+                curr_pose.pose.orientation.z =  curr_tf.transform.rotation.z
+                curr_pose.pose.orientation.w =  curr_tf.transform.rotation.w
 
-                self.tasks.pop(0)
+                distances = []
+                for goal_pose in goal_poses:
+                    dist = self.calculate_distance(curr_pose, goal_pose)
+                    distances.append(dist)
+
+                # choose the closest and save it in the self.active_goal
+
+                min_val = min(distances)
+                min_index = distances.index(min_val)
+
+                self.active_goal = goal_poses[min_index]
+                self.get_logger().info(f'Found goal {min_index} is closest!')
+
+                self.tasks.pop(min_index)
                 self.state = State.ACTIVE
             case State.ACTIVE:
-
-
                 if not self.nav_is_complete:
                     return
 
@@ -342,8 +385,8 @@ class AgentNode(Node):
                 # self.activate_payload_mechanism()
 
                 if len(self.tasks) > 0:
-                    self.get_logger().info('More tasks left! Continuing to next goals...')
                     self.state = State.STANDBY
+                    self.get_logger().info(f'{len(self.tasks)} more Tasks to go! Not returning yet...')
                     return
 
                 self.active_goal = self.initial_pose
@@ -364,6 +407,7 @@ class AgentNode(Node):
                 self.state = State.STANDBY
 
         self.nav_is_complete = False
+
         
 # -------------------------------------------------------------------------------------------
 

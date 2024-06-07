@@ -55,7 +55,7 @@ class MissionNode(Node):
         self.declare_parameter('goal_count', 10)
 
         # Object variables
-        self._state: int                        = State.AWAIT_TASKS
+        self._state: int                        = State.AWAIT_TASKS.value
 
         self._goals: list[ObjectData]           = []
         self._agents: list[ObjectData]          = []
@@ -74,11 +74,6 @@ class MissionNode(Node):
         # Service Clients
         self._agent_goal_clients: list[Client]      = []
         self._agent_start_nav_clients: list[Client] = [] 
-
-        # Futures
-        self._send_goal_futures: list[GoalFuture] = []
-        # FIX: change this to the dataclass when i get to it...
-        self._start_goal_futures: list[Future] = []
 
         # Transform buffer and listener to get marker tfs
         self.tf_buffer = Buffer()
@@ -130,26 +125,6 @@ class MissionNode(Node):
         goal_future = GoalFuture(agent_id, future)
         self._send_goal_futures.append(goal_future)
 
-    def accept_path(self, agent_id: str):
-        agent_client = self.get_client_by_agent_id(agent_id, self._agent_start_nav_clients)
-
-        if agent_client is None:
-            self.get_logger().error(f'No client found with agent id {agent_id}')
-            return
-
-        self.get_logger().warn(f'Waiting for {agent_client.srv_name}...')
-        while not agent_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn(f'{agent_client.srv_name} service not available, waiting again...')
-
-        req = SetBool.Request()
-        req.data = True
-        self.get_logger().info(f'Requesting to open door...')
-
-        # FIX: future will have to be stored in a list
-        future = agent_client.call_async(req)
-        # rclpy.spin_until_future_complete(self, future)
-        # return future.result()
-        
 # ----------------------------------------------------------------------------
 
     # NOTE: SERVICE CALLBACKS
@@ -158,14 +133,6 @@ class MissionNode(Node):
         if request.id in self._agents:
             self.get_logger().warn(f'Agent {request.id} already registered! Skipping...')
         else:
-            new_goal_client = self.create_client(SendGoal, f'{request.id}/send_goal') 
-            self._agent_goal_clients.append(new_goal_client)
-            self.get_logger().info(f'Registered agent client {new_goal_client.srv_name}')
-
-            new_start_nav_client = self.create_client(SetBool, f'{request.id}/start_nav') 
-            self._agent_start_nav_clients.append(new_start_nav_client)
-            self.get_logger().info(f'Registered agent client {new_start_nav_client.srv_name}')
-
             new_agent = ObjectData(id=request.id)
             self._agents.append(new_agent)
             self.get_logger().info(f'Successfully registered Agent {request.id}!')
@@ -173,50 +140,9 @@ class MissionNode(Node):
         response.success = True
         return response
 
-    # HACK: Check if this works. Will it reject agents with no namespace?
     def task_callback(self, request: SendTask.Request, response: SendTask.Response):
-        requested_goal = self.get_object_by_id(request.goal, self._goals)
-        requested_agent = self.get_object_by_id(request.agent, self._agents)
-
-        if requested_goal is None:
-            self.get_logger().error('Incoming task rejected! Requested goal is non-existent!')
-            response.success = False
-            return response
-
-        if requested_goal.occupied:
-            self.get_logger().error('Incoming task rejected! Requested goal is already occupied!')
-            response.success = False
-            return response
-
-        if requested_agent is None:
-            self.get_logger().error('Incoming task rejected! Requested goal is non-existent!')
-            response.success = False
-            return response
-
-        if requested_agent.occupied:
-            self.get_logger().error('Incoming task rejected! Requested agent is already occupied!')
-            response.success = False
-            return response
-
-        self._task_count += 1
-        new_task = TaskData(
-            id=self._task_count,
-            agent_id=request.agent,
-            goal_id=request.goal,
-        )
-        self._tasks.append(new_task)
-
-        response.success = True
-        return response
-
-    def path_dist_callback(self, request: SendPathDist.Request, response: SendPathDist.Response):
-        new_path_dist = PathData(
-            path_length=request.path_length,
-            agent_id=request.agent_id,
-            goal_id=request.goal_id,
-        )
-
-        self._calculated_paths.append(new_path_dist)
+        # Receive tasks and store them
+        # Request is a list
 
         response.success = True
         return response
@@ -250,109 +176,7 @@ class MissionNode(Node):
 
     def main_loop(self) -> None:
 
-        match self._state:
-            # HACK: Does this have to be a separate state, or do I want it at the beginning...
-            case State.AWAIT_TASKS:
-                if not self._tasks:
-                    self.get_logger().warn(f'Waiting for tasks...')
-                    return
-
-                if self._current_task is None:
-                    self._current_task = self._tasks[0]
-                    return
-
-                self._state = State.PICK_AGENT
-                self.get_logger().info('Changing state from AWAIT_TASKS to PICK_AGENT')
-
-            case State.PICK_AGENT:
-                # FIX: Will probably have to reset if this ever happens...
-                if self._current_task is None:
-                    self.get_logger().error('Current Task has been lost...')
-                    return
-
-                free_agents: list[ObjectData] = [agent for agent in self._agents if not agent.occupied]
-
-                for agent in free_agents:
-                    goal_transform = self.get_marker_transform(self._current_task.goal_id)
-
-                    # FIX: Currently will loop if transform, maybe wanna timeout?
-                    if goal_transform is None:
-                        self.get_logger().error('Could not find goal transform! Trying again...')
-                        return
-                    
-                    # TODO: Move this into a function.
-                    goal_pose = PoseStamped()
-                    goal_pose.header.frame_id = 'map'
-                    goal_pose.pose.position.x = goal_transform.transform.translation.x
-                    goal_pose.pose.position.y = goal_transform.transform.translation.y
-                    goal_pose.pose.position.z = goal_transform.transform.translation.z
-                    goal_pose.pose.orientation.x = goal_transform.transform.rotation.x
-                    goal_pose.pose.orientation.y = goal_transform.transform.rotation.y
-                    goal_pose.pose.orientation.z = goal_transform.transform.rotation.z
-                    goal_pose.pose.orientation.w = goal_transform.transform.rotation.w
-                    
-                    # check if future is the correct future for current agent
-                    goal_future = next((future for future in self._send_goal_futures if future.id == agent.id), None)
-                    if goal_future is None:
-                        self.send_goal(agent.id, self._current_task.goal_id, goal_pose)
-                        self.get_logger().warn(f'No related future goal found for agent {agent.id}. Trying again...')
-                        return
-                    if goal_future.future is None:
-                        # self.send_goal(agent.id, self._current_task.goal_id, goal_pose)
-                        self.get_logger().info(f'Goal {self._current_task.goal_id} was sent to agent {agent.id}!')
-                        return
-                    if not goal_future.future.result():
-                        self.get_logger().warn('Response was bad after sending goal. Trying again...')
-                        return
-
-                self._state = State.SEND_GOAL
-                self.get_logger().info('Changing State from PICK_AGENT to SEND_GOAL')
-            case State.SEND_GOAL:
-                self.get_logger().info('SEND_GOAL...')
-
-        # task_agent = self.get_object_by_id(self._current_task.agent_id, self._agents)
-        # task_goal = self.get_object_by_id(self._current_task.goal_id, self._goals)
-        #
-        # if task_agent is None:
-        #     self.get_logger().error('Could not find agent requested in task! Deleting Task...')
-        #     self._tasks.pop(0)
-        #     return
-        #
-        # if task_goal is None:
-        #     self.get_logger().error('Could not find goal requested in task! Deleting Task...')
-        #     self._tasks.pop(0)
-        #     return
-        #
-        # # Check for the sigle robot case (no namespace)
-        # if self._current_task.agent_id == '' and len(self._agents) == 1:
-        #     goal_transform = self.get_marker_transform(task_goal.id)
-        #
-        #     # HACK: Currently will loop if transform, maybe wanna timeout?
-
-        #     if goal_transform is None:
-        #         self.get_logger().error('Could not find goal transform! Trying again...')
-        #         return
-        #     
-        #     # TODO: Move this into a function.
-
-        #     goal_pose = PoseStamped()
-        #     goal_pose.header.frame_id = 'map'
-        #     goal_pose.pose.position.x = goal_transform.transform.translation.x
-        #     goal_pose.pose.position.y = goal_transform.transform.translation.y
-        #     goal_pose.pose.position.z = goal_transform.transform.translation.z
-        #     goal_pose.pose.orientation.x = goal_transform.transform.rotation.x
-        #     goal_pose.pose.orientation.y = goal_transform.transform.rotation.y
-        #     goal_pose.pose.orientation.z = goal_transform.transform.rotation.z
-        #     goal_pose.pose.orientation.w = goal_transform.transform.rotation.w
-        #
-        #     
-        #     if self._goal_future is None:
-        #         self.send_goal(task_agent.id, task_goal.id, goal_pose)
-        #         return
-        # 
-        #     self.get_logger().info(f'{self._goal_future.result()=}')
-        #
-        #     # self.get_logger().info(f'Sent goal {task_goal.id} to agent {task_agent.id}')
+        pass
 
 # ----------------------------------------------------------------------------
 
