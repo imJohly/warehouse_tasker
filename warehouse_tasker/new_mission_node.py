@@ -1,33 +1,29 @@
-from argparse import RawDescriptionHelpFormatter
-from threading import activeCount
 import rclpy
 from rclpy.clock import Duration, Time
-from rclpy.node import Node
+from rclpy.node import Node, Subscription
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import Client, Future, MultiThreadedExecutor
 
-from std_srvs.srv import SetBool
-from tf2_ros import Buffer, PoseStamped, TransformListener
-from geometry_msgs.msg import TransformStamped
+from tf2_ros import Buffer, TransformListener
+from geometry_msgs.msg import Pose, PoseStamped, PoseWithCovarianceStamped, TransformStamped
 
 from dataclasses import dataclass
 
-from warehouse_tasker_interfaces.srv import Register, SendTask, SendGoal, SendPathDist
-
+from warehouse_tasker_interfaces.srv import Register, SendTask, SendPose, GetPose
 from enum import Enum
 
 # TODO: See if I need a state machine?
 class State(Enum):
-    AWAIT_TASKS:    int = 1
-    PICK_AGENT:     int = 2
-    SEND_GOAL:      int = 3
-
-# TODO: Maybe match these with the service interfaces
+    STANDBY = 1
+    DISTANCE = 2
+    SEQUENCE = 3
+    SEND_GOAL = 4
 
 @dataclass
 class ObjectData:
     id:             str
-    occupied:       bool = False    # FIX: Does a boolean work for this?
+    pose:           Pose
+    occupied:       bool = False
 
 @dataclass
 class TaskData:
@@ -42,11 +38,6 @@ class PathData:
     agent_id:       str
     goal_id:        str
 
-@dataclass
-class GoalFuture:
-    id:             str
-    future:         Future | None = None
-
 class MissionNode(Node):
     def __init__(self):
         super().__init__('mission_node')
@@ -55,25 +46,25 @@ class MissionNode(Node):
         self.declare_parameter('goal_count', 10)
 
         # Object variables
-        self._state: int                        = State.AWAIT_TASKS.value
+        self._state                             = State.value
 
-        self._goals: list[ObjectData]           = []
-        self._agents: list[ObjectData]          = []
+        self._goals: dict[str, ObjectData]      = {}
+        self._agents: dict[str, ObjectData]     = {}
 
         self._tasks: list[TaskData]             = []
-        self._current_task: TaskData | None     = None      # NOTE: See if I'll need this...
         self._task_count: int                   = 0
 
-        self._calculated_paths: list[PathData]  = []
+        # Subscribers
+        self._agent_pose_subscribers: list[Subscription] = []
 
         # Services
         self._registration_service              = self.create_service(Register, 'register_agent', self.registration_callback)
         self._task_service                      = self.create_service(SendTask, 'send_task', self.task_callback)
-        self._path_dist_service                 = self.create_service(SendPathDist, 'send_path_dist', self.path_dist_callback)
 
         # Service Clients
-        self._agent_goal_clients: list[Client]      = []
-        self._agent_start_nav_clients: list[Client] = [] 
+        self._agent_goal_clients: dict[str, Client] = {}
+        self._agent_pose_clients: dict[str, Client] = {}
+        self._agent_pose_results: dict[str, Future] = {}
 
         # Transform buffer and listener to get marker tfs
         self.tf_buffer = Buffer()
@@ -92,38 +83,19 @@ class MissionNode(Node):
             return
 
         for goal_index in range(goal_count):
-            self._goals.append(ObjectData(id=str(goal_index)))
+            goal_tf = self.get_marker_transform(f'{goal_index}')
+
+            if goal_tf is None:
+                self.get_logger().warn(f'Failed to initialise goal {goal_index}, could not find goal tf!')
+                continue
+
+            goal_pose = Pose()
+            goal_pose.position = goal_tf.transform.translation
+            goal_pose.orientation = goal_tf.transform.rotation
+
+            self._goals[f'goal_index'] = ObjectData(id=str(goal_index), pose=goal_pose)
 
         self.get_logger().info(f'Initialised {goal_count} goals.')
-
-# ----------------------------------------------------------------------------
-
-    # NOTE: SERVICE CLIENT CALL FUNCTIONS
-
-    # FIX: If there is a place for a deadlock. It's here.
-
-    def send_goal(self, agent_id: str, goal_id: str, goal_pose: PoseStamped):
-        agent_client = self.get_client_by_agent_id(agent_id, self._agent_goal_clients)
-
-        if agent_client is None:
-            self.get_logger().error(f'No client found with agent id {agent_id}')
-            return
-
-        self.get_logger().warn(f'Waiting for {agent_client.srv_name}...')
-        while not agent_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn(f'{agent_client.srv_name} service not available, waiting again...')
-
-        req = SendGoal.Request()
-        req.goal_id = goal_id
-        req.goal_pose = goal_pose
-        self.get_logger().info(f'Sending Goal {goal_id} request to agent {agent_id}...')
-
-        # FIX: Potentially could store as a object variable...
-        # This will probably only work for one robot...
-        future = agent_client.call_async(req)
-
-        goal_future = GoalFuture(agent_id, future)
-        self._send_goal_futures.append(goal_future)
 
 # ----------------------------------------------------------------------------
 
@@ -133,9 +105,14 @@ class MissionNode(Node):
         if request.id in self._agents:
             self.get_logger().warn(f'Agent {request.id} already registered! Skipping...')
         else:
+            new_goal_client = self.create_client(SendPose, f'{request.id}/send_goal')
+            self._agent_goal_clients[f'{request.id}'] = new_goal_client
+            new_pose_client = self.create_client(GetPose, f'{request.id}/get_pose')
+            self._agent_pose_clients[f'{request.id}'] = new_pose_client
+
             new_agent = ObjectData(id=request.id)
             self._agents.append(new_agent)
-            self.get_logger().info(f'Successfully registered Agent {request.id}!')
+            self.get_logger().info(f'Successfully registered Agent {request.id} and its services!')
 
         response.success = True
         return response
@@ -149,19 +126,61 @@ class MissionNode(Node):
 
 # ----------------------------------------------------------------------------
 
+    # NOTE: SERVICE CLIENT CALL FUNCTIONS
+
+    def send_goal(self, agent_id: str, goal_id: str, goal_pose: PoseStamped) -> None:
+        agent_client = self._agent_goal_clients[f'{agent_id}']
+        if agent_client is None:
+            self.get_logger().error(f'No client found with agent id {agent_id}')
+            return
+
+        self.get_logger().warn(f'Waiting for {agent_client.srv_name}...')
+        while not agent_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn(f'{agent_client.srv_name} service not available, waiting again...')
+
+        req = SendPose.Request()
+        req.id = goal_id
+        req.pose = goal_pose
+        self.get_logger().info(f'Sending Goal {goal_id} request to agent {agent_id}...')
+
+        agent_client.call_async(req)
+      
+    def get_agent_pose(self, agent_id: str) -> None:
+        if agent_id not in self._agent_pose_clients.keys():
+            self.get_logger().error(f'No client found with agent id {agent_id}')
+            return
+        agent_client = self._agent_pose_clients[agent_id]
+
+        self.get_logger().warn(f'Waiting for {agent_client.srv_name}...')
+        while not agent_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn(f'{agent_client.srv_name} service not available, waiting again...')
+
+        req = GetPose.Request()
+        req.id = agent_id
+
+        self.get_logger().info(f'Sending pose request to agent {agent_id}...')
+        future = agent_client.call_async(req)
+        future.add_done_callback(self.future_pose_callback)
+
+    def future_pose_callback(self, future: Future):
+        try:
+            response: PoseWithCovarianceStamped | None = future.result()
+            if response is None:
+                return
+            self.get_logger().info(f'Pose: {response.pose.pose.pose.position}')
+        except Exception as e:
+            self.get_logger().error(f'Service call failed: {e}')
+
+
+# ----------------------------------------------------------------------------
+
     # NOTE: HELPER FUNCTIONS
 
-    def get_object_by_id(self, object_id: str, object_list: list[ObjectData]) -> ObjectData | None:
-        return next((obj for obj in object_list if obj.id == object_id), None)
-
-    def get_client_by_agent_id(self, agent_id: str, client_list: list[Client]) -> Client | None:
-        return next((client for client in client_list if agent_id in client.srv_name), None)
-
-    def get_marker_transform(self, index: int | str) -> TransformStamped | None:
+    def get_marker_transform(self, id: str) -> TransformStamped | None:
         try:
             transform: TransformStamped = self.tf_buffer.lookup_transform(
                 target_frame='map',
-                source_frame=f'marker{index}',
+                source_frame=f'marker{id}',
                 time=Time(seconds=0),
                 timeout=Duration(seconds=1),
             )
@@ -176,12 +195,14 @@ class MissionNode(Node):
 
     def main_loop(self) -> None:
 
-        pass
+        if len(self._tasks) <= 0:
+            self.get_logger().info('Waiting for tasks...')
+            return
 
 # ----------------------------------------------------------------------------
 
 def main(args=None) -> None:
-    rclpy.init()
+    rclpy.init(args=args)
 
     node = MissionNode()
     

@@ -1,8 +1,3 @@
-from math import inf
-import rclpy
-
-from geometry_msgs.msg import PoseStamped, Pose
-
 import lkh
 import numpy as np
 
@@ -45,5 +40,4 @@ problem.edge_weights = np.array([
 problem.fixed_edges = [[1, 2]]
 
 if __name__ == '__main__':
-    routes = lkh.solve(problem=problem, max_trials=10000, runs=10)
-    print(routes)
+    pass

@@ -8,10 +8,12 @@ from tf2_ros import Buffer, StaticTransformBroadcaster, TransformListener
 
 from geometry_msgs.msg import TransformStamped
 
-class DropZoneBroadcaster(Node):
+# TODO: Broadcast any goal Tfs to a marker/goal_visual topic
+
+class GoalBroadcaster(Node):
 
     def __init__(self) -> None:
-        super().__init__('drop_zone_broadcaster')
+        super().__init__('goal_broadcaster')
 
         self.tf_buffer = Buffer()
         self.listener = TransformListener(self.tf_buffer, self)
