@@ -28,10 +28,16 @@ class GoalBroadcaster(Node):
         self.marker_locations = self.import_goals(marker_yaml_path)
         self.transfer_transforms()
         self.publish_visual_markers()
-        # self.create_timer(60.0, self.publish_visual_markers)
 
-    def import_goals(self, file_path: str):
-        """Imports goal locations from a YAML file"""
+    def import_goals(self, file_path: str) -> dict:
+        """Imports goal locations from a YAML file.
+
+        Arguments:
+            file_path - A string path to the goal locations YAML file
+
+        Returns:
+            A dictionary containing imported goal locations.
+        """
         marker_locations = {}
         with open(file_path, 'r') as stream:
             marker_locations = yaml.safe_load(stream)
@@ -39,10 +45,12 @@ class GoalBroadcaster(Node):
 
         return marker_locations
 
-    def transfer_transforms(self):
+    def transfer_transforms(self) -> None:
+        """Gets all marker transforms and publishes them as static tfs."""
+        marker_transforms = []
         for i in self.marker_locations['positions']:
+            marker_transform = TransformStamped()
             try:
-                marker_transform = TransformStamped()
                 marker_transform.header.frame_id = 'map'
                 marker_transform.child_frame_id = f'marker{i}'
 
@@ -50,20 +58,20 @@ class GoalBroadcaster(Node):
                 y = self.marker_locations['positions'][i]['translation'][1]
                 z = self.marker_locations['positions'][i]['translation'][2]
 
-                self.get_logger().info(f"{i}: {self.marker_locations['positions'][i]}")
-
-                marker_transform.transform.translation.x = float(x)
-                marker_transform.transform.translation.y = float(y)
-                marker_transform.transform.translation.z = float(z)
+                marker_transform.transform.translation = Vector3(x=float(x), y=float(y), z=float(z))
 
                 marker_transform.transform.rotation.w = 1.0
+                marker_transforms.append(marker_transform)
+                self.get_logger().info(f'Broadcasting marker{i} with translation: {self.marker_locations["positions"][i]}')
 
-                self.static_tf_broadcaster.sendTransform(marker_transform)
-                self.get_logger().info(f'Broadcasting marker{i}')
             except BaseException as e:
-                self.get_logger().warn(f"Error transferring transform: {e}")
+                self.get_logger().warn(f'Error transferring transform: {e}')
+
+        self.static_tf_broadcaster.sendTransform(marker_transforms)
+
 
     def publish_visual_markers(self) -> None:
+        """Gets all marker positions and publishes them as a visual marker array."""
         array_msg = MarkerArray()
 
         for i in self.marker_locations['positions']:
