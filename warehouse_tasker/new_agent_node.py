@@ -1,22 +1,14 @@
 import math
 
+from geometry_msgs.msg import Pose
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
-from tf2_ros import PoseStamped, PoseWithCovarianceStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 
 from std_srvs.srv import SetBool
 from warehouse_tasker_interfaces.srv import Register, SendPose, GetPose
-
-from enum import Enum
-
-class State(Enum):
-    STANDBY = 1
-    COMP_PATH = 2
-    ACTIVE = 3
-    ARRIVED = 4
-    RETURNING = 5
 
 class AgentNode(Node):
     def __init__(self) -> None:
@@ -29,20 +21,14 @@ class AgentNode(Node):
         self._initial_pose: PoseWithCovarianceStamped | None  = None
         self._current_pose: PoseWithCovarianceStamped | None  = None
 
-        self._current_goal: PoseStamped | None  = None
-        self._current_goal_id: str | None       = None
-        self._agent_state: int                  = State.STANDBY.value
-
-        self._path_accepted: bool | None        = None
+        self._current_goals: Pose | None        = None
 
         # Subscribers
-        # FIX: Needs to be remapped to tb1? unless cause it relative
         self._initial_pose_subscriber           = self.create_subscription(PoseWithCovarianceStamped, 'initialpose', self.initial_pose_callback, qos_profile=5)
         self._pose_subscriber                   = self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose', self.pose_callback, qos_profile=100)
 
         # Services
         self._goal_service                      = self.create_service(SendPose, 'send_goal', self.send_goal_callback)
-        self._pose_service                      = self.create_service(GetPose, 'get_pose', self.get_pose_callback)
 
         # Service Clients
         self._registration_client               = self.create_client(Register, '/register_agent')
@@ -121,26 +107,10 @@ class AgentNode(Node):
             response.success = False
             return response
 
-        if request.id is None:
-            self.get_logger().error('No goal ID given in request! Ignoring goal...')
-            response.success = False
-            return response
-
         self._current_goal      = request.pose
-        self._current_goal_id   = request.id
 
         self.get_logger().info(f'Received goal locations - x: {request.pose.pose.position.x}, y: {request.pose.pose.position.y}')
 
-        response.success = True
-        return response
-
-    def get_pose_callback(self, request: GetPose.Request, response: GetPose.Response):
-        if self._current_pose is None:
-            self.get_logger().info('Current pose is not ready! Skipping service call...')
-            return
-
-        self.get_logger().info(f'Received get_pose service call!')
-        response.pose = self._current_pose
         response.success = True
         return response
 
@@ -156,12 +126,10 @@ class AgentNode(Node):
 # -------------------------------------------------------------------------------------------
 
     # FIX: Need to figure out what to do with main loop
-
     def main_loop(self) -> None:
         if self._current_goal is None:
             self.get_logger().warn(f'No goal set, awaiting new goal...')
             return
-
         
 
 def main(args=None) -> None:
