@@ -69,7 +69,6 @@ class GoalBroadcaster(Node):
 
         self.static_tf_broadcaster.sendTransform(marker_transforms)
 
-
     def publish_visual_markers(self) -> None:
         """Gets all marker positions and publishes them as a visual marker array."""
         array_msg = MarkerArray()
