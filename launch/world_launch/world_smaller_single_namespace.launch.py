@@ -33,7 +33,6 @@ def generate_launch_description():
     # Names and poses of the robots
     robots = [
         {'name': 'tb1', 'x_pose': '-1.85', 'y_pose': '-0.3', 'z_pose': 0.01},
-        # {'name': 'tb2', 'x_pose': '-1.5', 'y_pose': '-1', 'z_pose': 0.01},
     ]
 
     TURTLEBOT3_MODEL = 'waffle'
@@ -56,7 +55,7 @@ def generate_launch_description():
     
     turtlebot3_multi_robot = get_package_share_directory('turtlebot3_multi_robot')
 
-    package_dir = get_package_share_directory('turtlebot3_multi_robot')
+    package_dir = get_package_share_directory('warehouse_tasker')
     nav_launch_dir = os.path.join(package_dir, 'launch', 'nav2_bringup')
 
     rviz_config_file = LaunchConfiguration('rviz_config_file')
@@ -71,7 +70,7 @@ def generate_launch_description():
     )
 
     world = os.path.join(
-        get_package_share_directory('warehouse_tasker'),
+        package_dir,
         'worlds', 'warehouse_world_2.world')
 
     gzserver_cmd = IncludeLaunchDescription(
@@ -90,7 +89,7 @@ def generate_launch_description():
     params_file = LaunchConfiguration('nav_params_file')
     declare_params_file_cmd = DeclareLaunchArgument(
         'nav_params_file',
-        default_value=os.path.join(get_package_share_directory('warehouse_tasker'), 'params', 'nav2_sim_params.yaml'),
+        default_value=os.path.join(package_dir, 'params', 'nav2_sim_params.yaml'),
         description='Full path to the ROS2 parameters file to use for all launched nodes')
     
      
@@ -108,7 +107,7 @@ def generate_launch_description():
         executable='map_server',
         name='map_server',
         output='screen',
-        parameters=[{'yaml_filename': os.path.join(get_package_share_directory('warehouse_tasker'), 'map', 'map_smaller.yaml'),
+        parameters=[{'yaml_filename': os.path.join(package_dir, 'map', 'map_smaller.yaml'),
                      },],
         remappings=remappings)
 
