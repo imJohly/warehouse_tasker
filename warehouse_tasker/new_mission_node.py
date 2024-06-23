@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 
 import math
-from os import close
 
 import lkh
 from lkh import LKHProblem
@@ -10,10 +9,12 @@ import rclpy
 from rclpy.clock import Duration
 from rclpy.node import Node, Subscription
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import Client, Future, MultiThreadedExecutor
+from rclpy.executors import Client, MultiThreadedExecutor
 
 from tf2_ros import Buffer, TransformListener
-from geometry_msgs.msg import Pose, PoseStamped, PoseWithCovarianceStamped, TransformStamped
+from geometry_msgs.msg import Pose, PoseWithCovarianceStamped, TransformStamped
+
+from tsplib95.fields import IndexedCoordinatesField, IntegerField, StringField
 
 from warehouse_tasker_interfaces.srv import Register, SendTask, SendPose
 
@@ -78,7 +79,7 @@ class MissionNode(Node):
         """Transitions the current state of the Mission node.
     
         Arguments:
-            new_state - The new state to transition to
+            new_state - The new state to transition into
 
         Returns:
             None
@@ -92,7 +93,14 @@ class MissionNode(Node):
         self.current_state.execute()
 
     def initialise_goals(self, goal_count: int) -> None:
-        """Initialises the goal transforms."""
+        """Initialises the goal transforms.
+
+        Arguments:
+            goal_count - amount of goals to initialise
+
+        Returns:
+            None
+        """
         if goal_count <= 0:
             self.get_logger().error('Failed to initialise goals! Shutting down...')
             rclpy.shutdown()
@@ -135,12 +143,6 @@ class MissionNode(Node):
                 rclpy.spin_once(self)
             
             attempts += 1
-
-    def compute_tsp_solution(self, agents: list[Thing], goals: list[Thing]) -> list[str]:
-
-        solution: list[str] = []
-
-        return solution
 
 # ----------------------------------------------------------------------------
 
@@ -200,7 +202,7 @@ class MissionNode(Node):
 
     # NOTE: SERVICE CLIENT CALL FUNCTIONS
 
-    def send_goal(self, agent_id: str, goals: list[str], goal_pose: PoseStamped) -> None:
+    def send_goals(self, agent_id: str, goals: list[str]) -> None:
         agent_client = self._agent_goal_clients[f'{agent_id}']
         if agent_client is None:
             self.get_logger().error(f'No client found with agent id {agent_id}')
@@ -215,6 +217,64 @@ class MissionNode(Node):
         self.get_logger().info(f'Sending Goal {goals} request to agent {agent_id}...')
 
         agent_client.call_async(req)
+
+# ----------------------------------------------------------------------------
+
+    # HACK: Is it possible to set LKH to calculate with set starting nodes? Depots only allow one
+    def create_tsp(self, current_task: Task) -> tuple[LKHProblem, dict[int, str]]:
+        """Create a TSP from the input task."""
+        node_count:  int            = 1
+        association: dict[int, str] = {}
+
+        tsp = LKHProblem()
+        tsp.name                    = 'problem'
+        tsp.salesmen                = len(self._agents)
+        tsp.type                    = 'TSP'
+        tsp.edge_weight_type        = 'EUC_2D'
+
+        node_coords: dict[int, tuple[float, float]] = {}
+        for id in current_task.goal_id:
+            pose = self._goals[id].pose
+            node_coords[node_count] = (pose.position.x, pose.position.y)
+            association[node_count] = id
+
+            node_count += 1
+            self.get_logger().info(f'Added goal {id} to TSP!')
+
+        tsp.dimension = len(node_coords)
+        tsp.node_coords = node_coords
+
+        return tsp, association
+
+    # HACK: This will find the robot that is closest to the first node and assign it that path
+    def assign_paths(self, paths: list[list[int]], association: dict[int, str]) -> dict[str, list[list[float]]]:
+        """Assigns the input paths to the closest agents."""
+        paths_to_execute = {}
+        for path in paths:
+            self.get_logger().info(f'Finding appropriate agent for path {path}...')
+            first_goal_position = self._goals[association[path[0]]].pose.position
+
+            # find closest agent
+            smallest_dist: float = 1000.0
+            closest_agent: Thing | None = None
+            free_agents: list[Thing] = [agent for agent in self._agents.values() if not agent.occupied]
+            for agent in free_agents:
+                new_dist = math.dist([first_goal_position.x, first_goal_position.y], 
+                                     [agent.pose.position.x, agent.pose.position.y])
+
+                if new_dist < smallest_dist:
+                    smallest_dist = new_dist
+                    closest_agent = agent
+
+            if closest_agent is None:
+                self.get_logger().warn('Could not find a free agent! Skipping...')
+                continue
+
+            paths_to_execute[closest_agent.id] = path
+            self._agents[closest_agent.id].occupied = True
+            self.get_logger().info(f'Assigning {closest_agent.id} to {path}!')
+
+        return paths_to_execute
 
 # ----------------------------------------------------------------------------
 
@@ -248,77 +308,29 @@ class TaskSelectionState(MissionState):
         else:
             self.node.transition_to(IdleState(self.node))
 
-# FIX: Is it possible to set LKH to calculate with set starting nodes? Depots only allow one
 class ComputeGoalsState(MissionState):
     def execute(self):
+        self.node.get_logger().info(f'ComputeGoals: Computing goals for task {self.node._current_task}')
+
         if self.node._current_task is None:
             self.node.get_logger().error('No current task selected. Going back to Idle state...')
             self.node.transition_to(IdleState)
             return
 
-        self.node.get_logger().info(f'ComputeGoals: Computing goals for task {self.node._current_task}')
+        tsp, thing_association = self.node.create_tsp(self.node._current_task)
+        solution = lkh.solve(problem=tsp)
+        paths_to_execute = self.node.assign_paths(solution, thing_association)
 
-        # Keep track of what node is associated with which agent or goal
-        thing_association: dict[int, str] = {}
-
-        # Create TSProblem
-        p = LKHProblem()
-        p.name = 'problem'
-        p.salesmen = len(self.node._agents)
-        p.type = 'TSP'
-        
-        p.edge_weight_type = 'EUC_2D'
-
-        node_count = 1
-
-        for id in self.node._current_task.goal_id:
-            pose = self.node._goals[id].pose
-            p.node_coords[node_count] = [pose.position.x, pose.position.y]
-            thing_association[node_count] = id
-
-            node_count += 1
-            self.node.get_logger().info(f'Added goal {id} to TSP!')
-
-        p.dimension = len(p.node_coords)
-
-        solution = lkh.solve(problem=p)
-
-        # HACK: This will find the robot that is closest to the first node and assign it that path
-        self._paths_to_execute = {}
-        for path in solution:
-            self.node.get_logger().info(f'Finding appropriate agent for path {path}...')
-            first_goal_position = self.node._goals[thing_association[path[0]]].pose.position
-
-            # find closest agent
-            smallest_dist: float = 1000.0
-            closest_agent: Thing | None = None
-            free_agents: list[Thing] = [agent for agent in self.node._agents.values() if not agent.occupied]
-            for agent in free_agents:
-                new_dist = math.dist([first_goal_position.x, first_goal_position.y], 
-                                     [agent.pose.position.x, agent.pose.position.y])
-
-                if new_dist < smallest_dist:
-                    smallest_dist = new_dist
-                    closest_agent = agent
-
-            if closest_agent is None:
-                self.node.get_logger().warn('Could not find a free agent! Skipping...')
-                continue
-
-            self.node._paths_to_execute[closest_agent.id] = path
-            self.node._agents[closest_agent.id].occupied = True
-            self.node.get_logger().info(f'Assigning {closest_agent.id} to {path}!')
+        self.node.get_logger().info(f'{paths_to_execute}')
 
         self.node.transition_to(ExecuteTaskState(self.node))
-
-# INFO: has multiple lists of paths to execute, sends each to the appropriate agent
+   
 class ExecuteTaskState(MissionState):
     def execute(self):
         self.node.get_logger().info(f'TaskCompleted: Completed task {self.node._current_task}')
 
-        for agent, path in self.node._paths_to_execute.items():
-            self.node.send_goal(agent, path)
-    
+        # for agent, path in self.node._paths_to_execute.items():
+        #     self.node.send_goals(agent_id=agent, goals=path)
 
         self.node._current_task = None
 

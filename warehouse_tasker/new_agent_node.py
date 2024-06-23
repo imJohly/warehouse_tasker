@@ -1,31 +1,31 @@
 import math
 
-from geometry_msgs.msg import Pose
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from geometry_msgs.msg import Pose, PoseStamped, PoseWithCovarianceStamped
 
 from std_srvs.srv import SetBool
-from warehouse_tasker_interfaces.srv import Register, SendPose, GetPose
+from warehouse_tasker_interfaces.srv import Register, SendPose
+
 
 class AgentNode(Node):
     def __init__(self) -> None:
-        super().__init__('agent_node')
+        super().__init__(node_name='agent_node')
 
         # ROS Parameters
         self.declare_parameter('use_mission', True)
 
         # Object Variables
+        self.current_state: AgentState          = IdleState(self)
+
         self._initial_pose: PoseWithCovarianceStamped | None  = None
         self._current_pose: PoseWithCovarianceStamped | None  = None
-
         self._current_goals: Pose | None        = None
 
         # Subscribers
         self._initial_pose_subscriber           = self.create_subscription(PoseWithCovarianceStamped, 'initialpose', self.initial_pose_callback, qos_profile=5)
-        self._pose_subscriber                   = self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose', self.pose_callback, qos_profile=100)
 
         # Services
         self._goal_service                      = self.create_service(SendPose, 'send_goal', self.send_goal_callback)
@@ -41,21 +41,51 @@ class AgentNode(Node):
             self.register_agent(self._namespace)
 
         # Start main loop
-        self.create_timer(1.0, self.main_loop)
+        self.create_timer(1.0, self.run)
         self._callback_group = ReentrantCallbackGroup()
+
+# -------------------------------------------------------------------------------------------
+
+    def transition_to(self, new_state) -> None:
+        """Transitions the current state of the Mission node.
+    
+        Arguments:
+            new_state - The new state to transition into
+
+        Returns:
+            None
+        """
+        self.current_state.on_exit()
+        self.current_state = new_state
+        self.current_state.on_enter()
+ 
+    def run(self) -> None:
+        """Begins state machine execution"""
+        self.current_state.execute()
+
+    def calculate_distance_between_poses(self, pose_one: PoseStamped, pose_two: PoseStamped) -> float:
+        """Calculates the distance between two poses.
+
+        Arguments:
+            pose_one - first pose
+            pose_two - second pose
+
+        Returns:
+            The distance as a float between pose_one and pose_two
+        """
+        return math.sqrt((pose_two.pose.position.x - pose_one.pose.position.x) ** 2 +
+                         (pose_two.pose.position.y - pose_one.pose.position.y) ** 2)
 
 # -------------------------------------------------------------------------------------------
 
     # NOTE: TOPIC CALLBACK FUNCTIONS
 
+    # FIX: Currently doesn't receive anything unless started before turtlebots are launched
+    # and until a 2D pose estimate is given.
     def initial_pose_callback(self, msg: PoseWithCovarianceStamped) -> None:
         """Callback function for receiving an initial pose."""
         self._initial_pose = msg
         self.get_logger().info('Receieved new intial pose!')
-
-    def pose_callback(self, msg: PoseWithCovarianceStamped) -> None:
-        """Callback function for receiving the current pose."""
-        self._current_pose = msg
 
 # -------------------------------------------------------------------------------------------
 
@@ -107,30 +137,43 @@ class AgentNode(Node):
             response.success = False
             return response
 
-        self._current_goal      = request.pose
+        self._current_goals = request.pose
 
-        self.get_logger().info(f'Received goal locations - x: {request.pose.pose.position.x}, y: {request.pose.pose.position.y}')
+        self.get_logger().info(f'Received {len(request.pose)} goal')
 
         response.success = True
         return response
 
 # -------------------------------------------------------------------------------------------
+        
+class AgentState:
+    def __init__(self, node) -> None:
+        self.node: AgentNode = node
 
-    # NOTE: HELPER FUNCTIONS
+    def on_enter(self):
+        pass
 
-    def calculate_distance_between_poses(self, pose_one: PoseStamped, pose_two: PoseStamped) -> float:
-        """Calculates the distance between two poses."""
-        return math.sqrt((pose_two.pose.position.x - pose_one.pose.position.x) ** 2 +
-                         (pose_two.pose.position.y - pose_one.pose.position.y) ** 2)
+    def on_exit(self):
+        pass
+
+    def execute(self):
+        pass
+
+class IdleState(AgentState):
+    def execute(self):
+        if self.node._current_goals is None:
+            self.node.get_logger().warn(f'No goal set, awaiting new goal...')
+            return
+
+class ActiveState(AgentState):
+    def execute(self):
+        pass
+
+class ReturnState(AgentState):
+    def execute(self):
+        pass
 
 # -------------------------------------------------------------------------------------------
-
-    # FIX: Need to figure out what to do with main loop
-    def main_loop(self) -> None:
-        if self._current_goal is None:
-            self.get_logger().warn(f'No goal set, awaiting new goal...')
-            return
-        
 
 def main(args=None) -> None:
     rclpy.init(args=args)
