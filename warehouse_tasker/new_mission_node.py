@@ -14,8 +14,6 @@ from rclpy.executors import Client, MultiThreadedExecutor
 from tf2_ros import Buffer, TransformListener
 from geometry_msgs.msg import Pose, PoseWithCovarianceStamped, TransformStamped
 
-from tsplib95.fields import IndexedCoordinatesField, IntegerField, StringField
-
 from warehouse_tasker_interfaces.srv import Register, SendTask, SendPose
 
 @dataclass
@@ -52,7 +50,7 @@ class MissionNode(Node):
         self._tasks: list[Task]             = []
         self._task_count: int               = 0
         self._current_task: Task | None     = None
-        self._paths_to_execute: dict[str, list[str]]
+        self._paths_to_execute: dict[str, list[Pose]]
 
         # Subscribers
         # HACK: Might even be able to delete this as there is no real need to store the subscribers
@@ -202,7 +200,7 @@ class MissionNode(Node):
 
     # NOTE: SERVICE CLIENT CALL FUNCTIONS
 
-    def send_goals(self, agent_id: str, goals: list[str]) -> None:
+    def send_goals(self, agent_id: str, goals: list[Pose]) -> None:
         agent_client = self._agent_goal_clients[f'{agent_id}']
         if agent_client is None:
             self.get_logger().error(f'No client found with agent id {agent_id}')
@@ -247,12 +245,12 @@ class MissionNode(Node):
         return tsp, association
 
     # HACK: This will find the robot that is closest to the first node and assign it that path
-    def assign_paths(self, paths: list[list[int]], association: dict[int, str]) -> dict[str, list[list[float]]]:
+    def assign_paths(self, paths: list[list[int]]) -> dict[str, list[str]]:
         """Assigns the input paths to the closest agents."""
         paths_to_execute = {}
         for path in paths:
             self.get_logger().info(f'Finding appropriate agent for path {path}...')
-            first_goal_position = self._goals[association[path[0]]].pose.position
+            first_goal_position = self._goals[f'{path[0]}'].pose.position
 
             # find closest agent
             smallest_dist: float = 1000.0
@@ -319,9 +317,28 @@ class ComputeGoalsState(MissionState):
 
         tsp, thing_association = self.node.create_tsp(self.node._current_task)
         solution = lkh.solve(problem=tsp)
-        paths_to_execute = self.node.assign_paths(solution, thing_association)
 
-        self.node.get_logger().info(f'{paths_to_execute}')
+        # convert nodes into goal index
+        all_paths = []
+        path_as_goals = []
+        for node_path in solution:
+            for node in node_path:
+                self.node.get_logger().warn(f'{node} = {thing_association[node]}')
+                path_as_goals.append(thing_association[node])
+            all_paths.append(path_as_goals)
+
+        assigned_node_paths = self.node.assign_paths(all_paths)
+        self.node.get_logger().info(f'Nodes to execute: {assigned_node_paths}')
+
+        # HACK: convert goals to poses
+        self.node._paths_to_execute = {}
+        for agent, goals in assigned_node_paths.items():
+            poses = []
+            for i in goals:
+                poses.append(self.node._goals[i].pose)
+            self.node._paths_to_execute[agent] = poses
+
+        self.node.get_logger().info(f'Assigned Pose List: {self.node._paths_to_execute}')
 
         self.node.transition_to(ExecuteTaskState(self.node))
    
@@ -329,8 +346,8 @@ class ExecuteTaskState(MissionState):
     def execute(self):
         self.node.get_logger().info(f'TaskCompleted: Completed task {self.node._current_task}')
 
-        # for agent, path in self.node._paths_to_execute.items():
-        #     self.node.send_goals(agent_id=agent, goals=path)
+        for agent, path in self.node._paths_to_execute.items():
+            self.node.send_goals(agent_id=agent, goals=path)
 
         self.node._current_task = None
 

@@ -54,7 +54,6 @@ def generate_launch_description():
 
     
     turtlebot3_multi_robot = get_package_share_directory('turtlebot3_multi_robot')
-
     package_dir = get_package_share_directory('warehouse_tasker')
     nav_launch_dir = os.path.join(package_dir, 'launch', 'nav2_bringup')
 
@@ -90,7 +89,8 @@ def generate_launch_description():
     declare_params_file_cmd = DeclareLaunchArgument(
         'nav_params_file',
         default_value=os.path.join(package_dir, 'params', 'nav2_sim_params.yaml'),
-        description='Full path to the ROS2 parameters file to use for all launched nodes')
+        description='Full path to the ROS2 parameters file to use for all launched nodes'
+    )
     
      
     ld.add_action(declare_use_sim_time)
