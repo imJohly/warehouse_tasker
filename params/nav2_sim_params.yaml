@@ -165,7 +165,7 @@ controller_server:
       use_rotate_to_heading: true
       allow_reversing: true
       rotate_to_heading_min_angle: 0.785
-      max_angular_accel: 1.0
+      max_angular_accel: 3.8
       max_robot_pose_search_dist: 10.0
 
 local_costmap:
