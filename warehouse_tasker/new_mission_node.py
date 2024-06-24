@@ -26,14 +26,7 @@ class Thing:
 class Task:
     id:             int
     agent_id:       str
-    goal_id:        list[str]
-    complete:       bool = False    # FIX: Check if I need them.
-
-@dataclass
-class Path:
-    path_length:    float
-    agent_id:       str
-    goal_id:        str
+    goal:           list[str]
 
 class MissionNode(Node):
     def __init__(self) -> None:
@@ -190,7 +183,7 @@ class MissionNode(Node):
         self._tasks.append(Task(
             id=self._task_count,
             agent_id=request.agent,
-            goal_id=request.goal
+            goal=request.goal
         ))
 
         response.success = True
@@ -231,13 +224,11 @@ class MissionNode(Node):
         tsp.edge_weight_type        = 'EUC_2D'
 
         node_coords: dict[int, tuple[float, float]] = {}
-        for id in current_task.goal_id:
+        for id in current_task.goal:
             pose = self._goals[id].pose
             node_coords[node_count] = (pose.position.x, pose.position.y)
             association[node_count] = id
-
             node_count += 1
-            self.get_logger().info(f'Added goal {id} to TSP!')
 
         tsp.dimension = len(node_coords)
         tsp.node_coords = node_coords
@@ -306,6 +297,8 @@ class TaskSelectionState(MissionState):
         else:
             self.node.transition_to(IdleState(self.node))
 
+# FIX: When there are less than 3 goals, assign multiple. Currently only
+# assigns the closest single robot.
 class ComputeGoalsState(MissionState):
     def execute(self):
         self.node.get_logger().info(f'ComputeGoals: Computing goals for task {self.node._current_task}')
@@ -315,28 +308,25 @@ class ComputeGoalsState(MissionState):
             self.node.transition_to(IdleState)
             return
 
-        tsp, thing_association = self.node.create_tsp(self.node._current_task)
-        solution = lkh.solve(problem=tsp)
-
-        # convert nodes into goal index
         all_paths = []
-        path_as_goals = []
-        for node_path in solution:
-            for node in node_path:
-                self.node.get_logger().warn(f'{node} = {thing_association[node]}')
-                path_as_goals.append(thing_association[node])
-            all_paths.append(path_as_goals)
+        if len(self.node._current_task.goal) < 3:
+            all_paths = [[int(goal) for goal in self.node._current_task.goal]]
+        else: 
+            tsp, thing_association = self.node.create_tsp(self.node._current_task)
+            solution = lkh.solve(problem=tsp)
 
+            # convert nodes into goal index
+            for node_path in solution:
+                all_paths.append([thing_association[node] for node in node_path])
+
+        # assign paths based on how close agents are to the first node in a path
         assigned_node_paths = self.node.assign_paths(all_paths)
         self.node.get_logger().info(f'Nodes to execute: {assigned_node_paths}')
 
-        # HACK: convert goals to poses
+        # convert goals to poses
         self.node._paths_to_execute = {}
         for agent, goals in assigned_node_paths.items():
-            poses = []
-            for i in goals:
-                poses.append(self.node._goals[i].pose)
-            self.node._paths_to_execute[agent] = poses
+            self.node._paths_to_execute[agent] = [self.node._goals[str(i)].pose for i in goals]
 
         self.node.get_logger().info(f'Assigned Pose List: {self.node._paths_to_execute}')
 
@@ -344,8 +334,10 @@ class ComputeGoalsState(MissionState):
    
 class ExecuteTaskState(MissionState):
     def execute(self):
-        self.node.get_logger().info(f'TaskCompleted: Completed task {self.node._current_task}')
+        self.node.get_logger().info(f'TaskCompleted: Completing task {self.node._current_task}')
 
+
+        self.node.get_logger().info(f'Task has {self.node._paths_to_execute}')
         for agent, path in self.node._paths_to_execute.items():
             self.node.send_goals(agent_id=agent, goals=path)
 
