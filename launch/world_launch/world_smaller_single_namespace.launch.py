@@ -1,4 +1,4 @@
-    #!/usr/bin/env python3
+#!/usr/bin/env python3
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,10 +30,17 @@ import launch.logging
 def generate_launch_description():
     ld = LaunchDescription()
 
+    turtlebot3_multi_robot = get_package_share_directory('turtlebot3_multi_robot')
+    package_dir = get_package_share_directory('warehouse_tasker')
+    nav_launch_dir = os.path.join(package_dir, 'launch', 'nav2_bringup')
+
     # Names and poses of the robots
     robots = [
-        {'name': 'tb1', 'x_pose': '-1.85', 'y_pose': '-0.3', 'z_pose': 0.01},
-    ]
+        {'name': 'tb1', 'x_pose': '-1.5', 'y_pose': '-0.5', 'z_pose': 0.01},
+        # {'name': 'tb2', 'x_pose': '-1.5', 'y_pose': '0.5', 'z_pose': 0.01},
+        # {'name': 'tb3', 'x_pose': '1.5', 'y_pose': '-0.5', 'z_pose': 0.01},
+        # {'name': 'tb4', 'x_pose': '1.5', 'y_pose': '0.5', 'z_pose': 0.01},
+        ]
 
     TURTLEBOT3_MODEL = 'waffle'
 
@@ -52,11 +59,6 @@ def generate_launch_description():
         name='enable_rviz', default_value=enable_rviz, description='Enable rviz launch'
     )
 
-    
-    turtlebot3_multi_robot = get_package_share_directory('turtlebot3_multi_robot')
-    package_dir = get_package_share_directory('warehouse_tasker')
-    nav_launch_dir = os.path.join(package_dir, 'launch', 'nav2_bringup')
-
     rviz_config_file = LaunchConfiguration('rviz_config_file')
     declare_rviz_config_file_cmd = DeclareLaunchArgument(
         'rviz_config_file',
@@ -64,13 +66,8 @@ def generate_launch_description():
             package_dir, 'rviz', 'multi_nav2_default_view.rviz'),
         description='Full path to the RVIZ config file to use')
 
-    urdf = os.path.join(
-        turtlebot3_multi_robot, 'urdf', 'turtlebot3_' + TURTLEBOT3_MODEL + '.urdf'
-    )
-
-    world = os.path.join(
-        package_dir,
-        'worlds', 'warehouse_world_2.world')
+    urdf = os.path.join(turtlebot3_multi_robot, 'urdf', 'turtlebot3_' + TURTLEBOT3_MODEL + '.urdf')
+    world = os.path.join(package_dir, 'worlds', 'warehouse_world_2.world')
 
     gzserver_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -89,8 +86,7 @@ def generate_launch_description():
     declare_params_file_cmd = DeclareLaunchArgument(
         'nav_params_file',
         default_value=os.path.join(package_dir, 'params', 'nav2_sim_params.yaml'),
-        description='Full path to the ROS2 parameters file to use for all launched nodes'
-    )
+        description='Full path to the ROS2 parameters file to use for all launched nodes')
     
      
     ld.add_action(declare_use_sim_time)
@@ -107,7 +103,7 @@ def generate_launch_description():
         executable='map_server',
         name='map_server',
         output='screen',
-        parameters=[{'yaml_filename': os.path.join(package_dir, 'map', 'map_smaller.yaml'),
+        parameters=[{'yaml_filename': os.path.join(package_dir, 'map', 'map_smaller_2.yaml'),
                      },],
         remappings=remappings)
 
@@ -201,9 +197,7 @@ def generate_launch_description():
 
         # Save last instance for next RegisterEventHandler
         last_action = spawn_turtlebot3_burger
-    ######################
-
-    ######################
+ 
     # Start rviz nodes and drive nodes after the last robot is spawned
     for robot in robots:
 
@@ -250,6 +244,5 @@ def generate_launch_description():
 
         ld.add_action(post_spawn_event)
         ld.add_action(declare_params_file_cmd)
-    ######################
 
     return ld
