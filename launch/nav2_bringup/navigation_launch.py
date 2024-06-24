@@ -28,9 +28,7 @@ from nav2_common.launch import RewrittenYaml
 
 def generate_launch_description():
     # Get the launch directory
-    #bringup_dir = get_package_share_directory('turtlebot3_gazebo')
- #   bringup_dir = get_package_share_directory('turtlebot3_navigation2') 
-    bringup_dir = get_package_share_directory('warehouse_tasker')    
+    bringup_dir = get_package_share_directory('warehouse_tasker')
 
     namespace = LaunchConfiguration('namespace')
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -51,7 +49,6 @@ def generate_launch_description():
                        'velocity_smoother']
     
     lifecycle_nodes1 = ['bt_navigator',
-    			'rviz2'
                        ]
     
 
@@ -88,12 +85,10 @@ def generate_launch_description():
         'use_sim_time',
         default_value='false',
         description='Use simulation (Gazebo) clock if true')
- 
+
     declare_params_file_cmd = DeclareLaunchArgument(
         'params_file',
-        #default_value=os.path.join(bringup_dir, 'params', 'nav2_params.yaml'),        
-        default_value=os.path.join(bringup_dir, 'params', 'nav2_params.yaml'),
-        #default_value=os.path.join(bringup_dir, 'param', 'waffle_pi.yaml'),
+        default_value=os.path.join(bringup_dir, 'params', 'nav2_sim_params.yaml'),
         description='Full path to the ROS2 parameters file to use for all launched nodes')
 
     declare_autostart_cmd = DeclareLaunchArgument(
@@ -109,7 +104,7 @@ def generate_launch_description():
         description='the name of conatiner that nodes will load in if use composition')
 
     declare_use_respawn_cmd = DeclareLaunchArgument(
-        'use_respawn', default_value='True',
+        'use_respawn', default_value='False',
         description='Whether to respawn if a node crashes. Applied when composition is disabled.')
 
     declare_log_level_cmd = DeclareLaunchArgument(
@@ -118,7 +113,7 @@ def generate_launch_description():
 
     load_nodes = GroupAction(
         condition=IfCondition(PythonExpression(['not ', use_composition])),
-        actions=[      
+        actions=[
             Node(
                 package='nav2_controller',
                 executable='controller_server',
@@ -266,7 +261,7 @@ def generate_launch_description():
 
     # Declare the launch options
     ld.add_action(declare_namespace_cmd)
-    ld.add_action(declare_use_sim_time_cmd) #ADDED BY CALLUM
+    ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_params_file_cmd)
     ld.add_action(declare_autostart_cmd)
     ld.add_action(declare_use_composition_cmd)
