@@ -52,6 +52,7 @@ class MissionNode(Node):
         # Services
         self._registration_service              = self.create_service(Register, 'register_agent', self.registration_callback)
         self._task_service                      = self.create_service(SendTask, 'send_task', self.task_callback)
+        self._done_service                      = self.create_service(Register, 'agent_done', self.done_callback)
 
         # Service Clients
         self._agent_goal_clients: dict[str, Client] = {}
@@ -185,6 +186,18 @@ class MissionNode(Node):
             agent_id=request.agent,
             goal=request.goal
         ))
+
+        response.success = True
+        return response
+
+    def done_callback(self, request: Register.Request, response: Register.Response):
+        if request.id == '':
+            self.get_logger().error('No agent ID received, ignoring service call...')
+            response.success = False
+            return
+
+        self._agents[request.id].occupied = False
+        self.get_logger().error(f'Successfully recieved agent ID {request.id}, agent is now not occupied!')
 
         response.success = True
         return response

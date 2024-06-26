@@ -2,11 +2,11 @@ import math
 
 import rclpy
 from rclpy.node import Node
-from rclpy.action.client import ActionClient
+from rclpy.action.client import ActionClient, Future
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 
-from geometry_msgs.msg import Point, Pose, PoseStamped, PoseWithCovarianceStamped
+from geometry_msgs.msg import Pose, PoseStamped, PoseWithCovarianceStamped
 
 from nav2_msgs.action import NavigateToPose
 
@@ -37,6 +37,9 @@ class AgentNode(Node):
         # Service Clients
         self._registration_client               = self.create_client(Register, '/register_agent')
         self._door_client                       = self.create_client(SetBool, '/open_door')
+
+        self._done_client                       = self.create_client(Register, '/agent_done')
+        self._agent_done_future                 = Future()
 
         # Action Clients
         self._nav_action_client                 = ActionClient(self, NavigateToPose, 'navigate_to_pose')
@@ -134,6 +137,18 @@ class AgentNode(Node):
         future = self._door_client.call_async(req)
         rclpy.spin_until_future_complete(self, future)
         return future.result()
+
+    def call_done_service(self):
+        self.get_logger().warn(f'Waiting for {self._done_client.srv_name}...')
+        while not self._done_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn(f'{self._done_client.srv_name} service not available, waiting again...')
+
+        req = Register.Request()
+        req.id = self._namespace
+
+        self._agent_done_future = self._done_client.call_async(req)
+        # rclpy.spin_until_future_complete(self, future)
+        # return future.result()
 
 # -------------------------------------------------------------------------------------------
 
@@ -239,10 +254,25 @@ class ActiveState(AgentState):
         if not self.node._nav_is_complete:
             self.node.get_logger().info('Execute: Waiting for navigation to complete...')
             return
-    
+
         if len(self.node._stored_goals) > 0:
             self.node.get_logger().info('Execute: More goals to complete...')
             self.node.transition_to(IdleState(self.node))
+            return
+
+        # HACK: To make this work, for now, the agent only accepts new tasks, after
+        # the current one is completely finished. Would be nice to expand this so that
+        # the mission node can calculate new optimal goals on the fly, but not right
+        # now.
+        self.node.call_done_service()
+        self.node.get_logger().warn(f'Execute: {self.node._agent_done_future.result()}')
+    
+        if self.node._agent_done_future is None:
+            self.node.get_logger().warn('Execute: Waiting for future to be done...')
+            return
+
+        if not self.node._agent_done_future.result():
+            self.node.get_logger().warn('Execute: Waiting for response from Mission Control...')
             return
 
         self.node.transition_to(ReturnState(self.node))
