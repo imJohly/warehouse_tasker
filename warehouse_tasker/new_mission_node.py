@@ -1,155 +1,154 @@
-from argparse import RawDescriptionHelpFormatter
-from threading import activeCount
-import rclpy
-from rclpy.clock import Duration, Time
-from rclpy.node import Node
-from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import Client, Future, MultiThreadedExecutor
-
-from std_srvs.srv import SetBool
-from tf2_ros import Buffer, PoseStamped, TransformListener
-from geometry_msgs.msg import TransformStamped
-
 from dataclasses import dataclass
 
-from warehouse_tasker_interfaces.srv import Register, SendTask, SendGoal, SendPathDist
+import math
 
-from enum import Enum
+import lkh
+from lkh import LKHProblem
 
-# TODO: See if I need a state machine?
-class State(Enum):
-    AWAIT_TASKS:    int = 1
-    PICK_AGENT:     int = 2
-    SEND_GOAL:      int = 3
+import rclpy
+from rclpy.clock import Duration
+from rclpy.node import Node, Subscription
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import Client, MultiThreadedExecutor
 
-# TODO: Maybe match these with the service interfaces
+from std_msgs.msg import Bool
+from tf2_ros import Buffer, TransformListener
+from geometry_msgs.msg import Pose, PoseWithCovarianceStamped, TransformStamped
+
+from warehouse_tasker_interfaces.srv import Register, SendTask, SendPose
 
 @dataclass
-class ObjectData:
+class Thing:
     id:             str
-    occupied:       bool = False    # FIX: Does a boolean work for this?
+    pose:           Pose
+    occupied:       bool = False
 
 @dataclass
-class TaskData:
+class Task:
     id:             int
     agent_id:       str
-    goal_id:        str
-    calculated:     bool = False    # FIX: This should probably be something else, STATE or COMPLETED?
-
-@dataclass
-class PathData:
-    path_length:    float
-    agent_id:       str
-    goal_id:        str
-
-@dataclass
-class GoalFuture:
-    id:             str
-    future:         Future | None = None
+    goal:           list[str]
 
 class MissionNode(Node):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__('mission_node')
 
         # ROS Parameters
         self.declare_parameter('goal_count', 10)
 
         # Object variables
-        self._state: int                        = State.AWAIT_TASKS
+        self.current_state: MissionState    = IdleState(self)
 
-        self._goals: list[ObjectData]           = []
-        self._agents: list[ObjectData]          = []
+        self._goals: dict[str, Thing]       = {}
+        self._agents: dict[str, Thing]      = {}
+        self._tasks: list[Task]             = []
+        self._task_count: int               = 0
+        self._current_task: Task | None     = None
+        self._paths_to_execute: dict[str, list[Pose]]
 
-        self._tasks: list[TaskData]             = []
-        self._current_task: TaskData | None     = None      # NOTE: See if I'll need this...
-        self._task_count: int                   = 0
-
-        self._calculated_paths: list[PathData]  = []
+        # Subscribers
+        # HACK: Might even be able to delete this as there is no real need to store the subscribers
+        self._agent_pose_subscribers: list[Subscription] = []
+        self._agent_state_subscribers: list[Subscription] = []
 
         # Services
         self._registration_service              = self.create_service(Register, 'register_agent', self.registration_callback)
         self._task_service                      = self.create_service(SendTask, 'send_task', self.task_callback)
-        self._path_dist_service                 = self.create_service(SendPathDist, 'send_path_dist', self.path_dist_callback)
 
         # Service Clients
-        self._agent_goal_clients: list[Client]      = []
-        self._agent_start_nav_clients: list[Client] = [] 
-
-        # Futures
-        self._send_goal_futures: list[GoalFuture] = []
-        # FIX: change this to the dataclass when i get to it...
-        self._start_goal_futures: list[Future] = []
+        self._agent_goal_clients: dict[str, Client] = {}
 
         # Transform buffer and listener to get marker tfs
         self.tf_buffer = Buffer()
         self.listener = TransformListener(self.tf_buffer, self)
 
         self.initialise_goals(self.get_parameter('goal_count').get_parameter_value().integer_value)
-        self.loop_timer = self.create_timer(1.0, self.main_loop)
+        self.loop_timer = self.create_timer(1.0, self.run)
         self.callback_group = ReentrantCallbackGroup()
 
 # ----------------------------------------------------------------------------
 
+    def transition_to(self, new_state) -> None:
+        """Transitions the current state of the Mission node.
+    
+        Arguments:
+            new_state - The new state to transition into
+
+        Returns:
+            None
+        """
+        self.current_state.on_exit()
+        self.current_state = new_state
+        self.current_state.on_enter()
+
+    def run(self) -> None:
+        """Begins state machine execution"""
+        self.current_state.execute()
+
     def initialise_goals(self, goal_count: int) -> None:
+        """Initialises the goal transforms.
+
+        Arguments:
+            goal_count - amount of goals to initialise
+
+        Returns:
+            None
+        """
         if goal_count <= 0:
             self.get_logger().error('Failed to initialise goals! Shutting down...')
             rclpy.shutdown()
             return
 
         for goal_index in range(goal_count):
-            self._goals.append(ObjectData(id=str(goal_index)))
+            goal_tf = self.get_marker_transform(f'{goal_index}')
+
+            if goal_tf is None:
+                self.get_logger().warn(f'Failed to initialise goal {goal_index}, could not find goal tf!')
+                continue
+
+            goal_pose = Pose()
+            goal_pose.position.x = goal_tf.transform.translation.x
+            goal_pose.position.y = goal_tf.transform.translation.y
+            goal_pose.position.z = goal_tf.transform.translation.z
+
+            goal_pose.orientation = goal_tf.transform.rotation
+
+            self._goals[f'{goal_index}'] = Thing(id=str(goal_index), pose=goal_pose)
 
         self.get_logger().info(f'Initialised {goal_count} goals.')
 
+    def get_marker_transform(self, id: str) -> TransformStamped | None:
+        """Gets marker transform from ID of marker."""
+        attempts = 0
+        while attempts < 5:
+            try:
+                transform: TransformStamped = self.tf_buffer.lookup_transform(
+                    target_frame='map',
+                    source_frame=f'marker{id}',
+                    time=self.get_clock().now(),
+                    timeout=Duration(nanoseconds=50000)
+                )
+                self.get_logger().info(f'Successfully found tf from "map" to "marker{id}" frame!')
+                return transform
+
+            except BaseException as e:
+                self.get_logger().error(f'Error getting transform from "map" to "marker{id}" frame!')
+                rclpy.spin_once(self)
+            
+            attempts += 1
+
 # ----------------------------------------------------------------------------
 
-    # NOTE: SERVICE CLIENT CALL FUNCTIONS
+    # NOTE: TOPIC CALLBACKS
 
-    # FIX: If there is a place for a deadlock. It's here.
+    def agent_pose_callback(self, msg: PoseWithCovarianceStamped, agent: str) -> None:
+        self.get_logger().info(f'Got new pose [x: {msg.pose.pose.position.x}, y: {msg.pose.pose.position.y}] from {agent}')
+        self._agents[agent].pose = msg.pose.pose
 
-    def send_goal(self, agent_id: str, goal_id: str, goal_pose: PoseStamped):
-        agent_client = self.get_client_by_agent_id(agent_id, self._agent_goal_clients)
+    def agent_state_callback(self, msg: Bool, agent: str) -> None:
+        self.get_logger().info(f'Got new state, {msg.data} of agent {agent}')
+        self._agents[agent].occupied = msg.data
 
-        if agent_client is None:
-            self.get_logger().error(f'No client found with agent id {agent_id}')
-            return
-
-        self.get_logger().warn(f'Waiting for {agent_client.srv_name}...')
-        while not agent_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn(f'{agent_client.srv_name} service not available, waiting again...')
-
-        req = SendGoal.Request()
-        req.goal_id = goal_id
-        req.goal_pose = goal_pose
-        self.get_logger().info(f'Sending Goal {goal_id} request to agent {agent_id}...')
-
-        # FIX: Potentially could store as a object variable...
-        # This will probably only work for one robot...
-        future = agent_client.call_async(req)
-
-        goal_future = GoalFuture(agent_id, future)
-        self._send_goal_futures.append(goal_future)
-
-    def accept_path(self, agent_id: str):
-        agent_client = self.get_client_by_agent_id(agent_id, self._agent_start_nav_clients)
-
-        if agent_client is None:
-            self.get_logger().error(f'No client found with agent id {agent_id}')
-            return
-
-        self.get_logger().warn(f'Waiting for {agent_client.srv_name}...')
-        while not agent_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn(f'{agent_client.srv_name} service not available, waiting again...')
-
-        req = SetBool.Request()
-        req.data = True
-        self.get_logger().info(f'Requesting to open door...')
-
-        # FIX: future will have to be stored in a list
-        future = agent_client.call_async(req)
-        # rclpy.spin_until_future_complete(self, future)
-        # return future.result()
-        
 # ----------------------------------------------------------------------------
 
     # NOTE: SERVICE CALLBACKS
@@ -158,206 +157,214 @@ class MissionNode(Node):
         if request.id in self._agents:
             self.get_logger().warn(f'Agent {request.id} already registered! Skipping...')
         else:
-            new_goal_client = self.create_client(SendGoal, f'{request.id}/send_goal') 
-            self._agent_goal_clients.append(new_goal_client)
-            self.get_logger().info(f'Registered agent client {new_goal_client.srv_name}')
+            new_goal_client = self.create_client(SendPose, f'{request.id}/send_goal')
+            self._agent_goal_clients[f'{request.id}'] = new_goal_client
 
-            new_start_nav_client = self.create_client(SetBool, f'{request.id}/start_nav') 
-            self._agent_start_nav_clients.append(new_start_nav_client)
-            self.get_logger().info(f'Registered agent client {new_start_nav_client.srv_name}')
+            # Create a subscriber
+            pose_topic = f'{request.id}/amcl_pose'
+            self._agent_pose_subscribers.append(self.create_subscription(
+                msg_type=PoseWithCovarianceStamped,
+                topic=pose_topic,
+                callback=lambda msg, agent=f'{request.id}': self.agent_pose_callback(msg, agent),
+                qos_profile=10
+            ))
+            self.get_logger().info(f'Subscribed to {pose_topic}')
 
-            new_agent = ObjectData(id=request.id)
-            self._agents.append(new_agent)
-            self.get_logger().info(f'Successfully registered Agent {request.id}!')
+            # Create a subscriber
+            state_topic = f'{request.id}/agent_state'
+            self._agent_pose_subscribers.append(self.create_subscription(
+                msg_type=Bool,
+                topic=state_topic,
+                callback=lambda msg, agent=f'{request.id}': self.agent_state_callback(msg, agent),
+                qos_profile=10
+            ))
+            self.get_logger().info(f'Subscribed to {state_topic}')
+
+            new_agent = Thing(id=request.id, pose=Pose())
+            self._agents[request.id] = new_agent
+            self.get_logger().info(f'Successfully registered Agent {request.id} and its services!')
 
         response.success = True
         return response
 
-    # HACK: Check if this works. Will it reject agents with no namespace?
     def task_callback(self, request: SendTask.Request, response: SendTask.Response):
-        requested_goal = self.get_object_by_id(request.goal, self._goals)
-        requested_agent = self.get_object_by_id(request.agent, self._agents)
-
-        if requested_goal is None:
-            self.get_logger().error('Incoming task rejected! Requested goal is non-existent!')
+        # Receive tasks and store them
+        # Request is a list
+        if request.goal == '':
+            self.get_logger().error('No goals requested in task, ignoring task...')
             response.success = False
-            return response
-
-        if requested_goal.occupied:
-            self.get_logger().error('Incoming task rejected! Requested goal is already occupied!')
-            response.success = False
-            return response
-
-        if requested_agent is None:
-            self.get_logger().error('Incoming task rejected! Requested goal is non-existent!')
-            response.success = False
-            return response
-
-        if requested_agent.occupied:
-            self.get_logger().error('Incoming task rejected! Requested agent is already occupied!')
-            response.success = False
-            return response
+            return
 
         self._task_count += 1
-        new_task = TaskData(
+        self._tasks.append(Task(
             id=self._task_count,
             agent_id=request.agent,
-            goal_id=request.goal,
-        )
-        self._tasks.append(new_task)
-
-        response.success = True
-        return response
-
-    def path_dist_callback(self, request: SendPathDist.Request, response: SendPathDist.Response):
-        new_path_dist = PathData(
-            path_length=request.path_length,
-            agent_id=request.agent_id,
-            goal_id=request.goal_id,
-        )
-
-        self._calculated_paths.append(new_path_dist)
+            goal=request.goal
+        ))
 
         response.success = True
         return response
 
 # ----------------------------------------------------------------------------
 
-    # NOTE: HELPER FUNCTIONS
+    # NOTE: SERVICE CLIENT CALL FUNCTIONS
 
-    def get_object_by_id(self, object_id: str, object_list: list[ObjectData]) -> ObjectData | None:
-        return next((obj for obj in object_list if obj.id == object_id), None)
+    def send_goals(self, agent_id: str, goals: list[Pose]) -> None:
+        agent_client = self._agent_goal_clients[f'{agent_id}']
+        if agent_client is None:
+            self.get_logger().error(f'No client found with agent id {agent_id}')
+            return
 
-    def get_client_by_agent_id(self, agent_id: str, client_list: list[Client]) -> Client | None:
-        return next((client for client in client_list if agent_id in client.srv_name), None)
+        self.get_logger().warn(f'Waiting for {agent_client.srv_name}...')
+        while not agent_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn(f'{agent_client.srv_name} service not available, waiting again...')
 
-    def get_marker_transform(self, index: int | str) -> TransformStamped | None:
-        try:
-            transform: TransformStamped = self.tf_buffer.lookup_transform(
-                target_frame='map',
-                source_frame=f'marker{index}',
-                time=Time(seconds=0),
-                timeout=Duration(seconds=1),
-            )
-            self.get_logger().info(f'Successfully found tf!')
-            return transform
+        req = SendPose.Request()
+        req.pose = goals
+        self.get_logger().info(f'Sending Goal {goals} request to agent {agent_id}...')
 
-        except BaseException as e:
-            self.get_logger().warn(f'Error getting transform: {e}')
-            return None
+        agent_client.call_async(req)
 
 # ----------------------------------------------------------------------------
 
-    def main_loop(self) -> None:
+    # HACK: Is it possible to set LKH to calculate with set starting nodes? Depots only allow one
+    def create_tsp(self, current_task: Task) -> tuple[LKHProblem, dict[int, str]]:
+        """Create a TSP from the input task."""
+        node_count:  int            = 1
+        association: dict[int, str] = {}
 
-        match self._state:
-            # HACK: Does this have to be a separate state, or do I want it at the beginning...
-            case State.AWAIT_TASKS:
-                if not self._tasks:
-                    self.get_logger().warn(f'Waiting for tasks...')
-                    return
+        tsp = LKHProblem()
+        tsp.name                    = 'problem'
+        tsp.salesmen                = len(self._agents)
+        tsp.type                    = 'TSP'
+        tsp.edge_weight_type        = 'EUC_2D'
 
-                if self._current_task is None:
-                    self._current_task = self._tasks[0]
-                    return
+        node_coords: dict[int, tuple[float, float]] = {}
+        for id in current_task.goal:
+            pose = self._goals[id].pose
+            node_coords[node_count] = (pose.position.x, pose.position.y)
+            association[node_count] = id
+            node_count += 1
 
-                self._state = State.PICK_AGENT
-                self.get_logger().info('Changing state from AWAIT_TASKS to PICK_AGENT')
+        tsp.dimension = len(node_coords)
+        tsp.node_coords = node_coords
 
-            case State.PICK_AGENT:
-                # FIX: Will probably have to reset if this ever happens...
-                if self._current_task is None:
-                    self.get_logger().error('Current Task has been lost...')
-                    return
+        return tsp, association
 
-                free_agents: list[ObjectData] = [agent for agent in self._agents if not agent.occupied]
+    # HACK: This will find the robot that is closest to the first node and assign it that path
+    def assign_paths(self, paths: list[list[int]]) -> dict[str, list[str]]:
+        """Assigns the input paths to the closest agents."""
+        paths_to_execute = {}
+        for path in paths:
+            self.get_logger().info(f'Finding appropriate agent for path {path}...')
+            first_goal_position = self._goals[f'{path[0]}'].pose.position
 
-                for agent in free_agents:
-                    goal_transform = self.get_marker_transform(self._current_task.goal_id)
+            # find closest agent
+            smallest_dist: float = 1000.0
+            closest_agent: Thing | None = None
+            free_agents: list[Thing] = [agent for agent in self._agents.values() if not agent.occupied]
+            for agent in free_agents:
+                new_dist = math.dist([first_goal_position.x, first_goal_position.y], 
+                                     [agent.pose.position.x, agent.pose.position.y])
 
-                    # FIX: Currently will loop if transform, maybe wanna timeout?
-                    if goal_transform is None:
-                        self.get_logger().error('Could not find goal transform! Trying again...')
-                        return
-                    
-                    # TODO: Move this into a function.
-                    goal_pose = PoseStamped()
-                    goal_pose.header.frame_id = 'map'
-                    goal_pose.pose.position.x = goal_transform.transform.translation.x
-                    goal_pose.pose.position.y = goal_transform.transform.translation.y
-                    goal_pose.pose.position.z = goal_transform.transform.translation.z
-                    goal_pose.pose.orientation.x = goal_transform.transform.rotation.x
-                    goal_pose.pose.orientation.y = goal_transform.transform.rotation.y
-                    goal_pose.pose.orientation.z = goal_transform.transform.rotation.z
-                    goal_pose.pose.orientation.w = goal_transform.transform.rotation.w
-                    
-                    # check if future is the correct future for current agent
-                    goal_future = next((future for future in self._send_goal_futures if future.id == agent.id), None)
-                    if goal_future is None:
-                        self.send_goal(agent.id, self._current_task.goal_id, goal_pose)
-                        self.get_logger().warn(f'No related future goal found for agent {agent.id}. Trying again...')
-                        return
-                    if goal_future.future is None:
-                        # self.send_goal(agent.id, self._current_task.goal_id, goal_pose)
-                        self.get_logger().info(f'Goal {self._current_task.goal_id} was sent to agent {agent.id}!')
-                        return
-                    if not goal_future.future.result():
-                        self.get_logger().warn('Response was bad after sending goal. Trying again...')
-                        return
+                if new_dist < smallest_dist:
+                    smallest_dist = new_dist
+                    closest_agent = agent
 
-                self._state = State.SEND_GOAL
-                self.get_logger().info('Changing State from PICK_AGENT to SEND_GOAL')
-            case State.SEND_GOAL:
-                self.get_logger().info('SEND_GOAL...')
+            if closest_agent is None:
+                self.get_logger().warn('Could not find a free agent! Skipping...')
+                continue
 
-        # task_agent = self.get_object_by_id(self._current_task.agent_id, self._agents)
-        # task_goal = self.get_object_by_id(self._current_task.goal_id, self._goals)
-        #
-        # if task_agent is None:
-        #     self.get_logger().error('Could not find agent requested in task! Deleting Task...')
-        #     self._tasks.pop(0)
-        #     return
-        #
-        # if task_goal is None:
-        #     self.get_logger().error('Could not find goal requested in task! Deleting Task...')
-        #     self._tasks.pop(0)
-        #     return
-        #
-        # # Check for the sigle robot case (no namespace)
-        # if self._current_task.agent_id == '' and len(self._agents) == 1:
-        #     goal_transform = self.get_marker_transform(task_goal.id)
-        #
-        #     # HACK: Currently will loop if transform, maybe wanna timeout?
+            paths_to_execute[closest_agent.id] = path
+            self._agents[closest_agent.id].occupied = True
+            self.get_logger().info(f'Assigning {closest_agent.id} to {path}!')
 
-        #     if goal_transform is None:
-        #         self.get_logger().error('Could not find goal transform! Trying again...')
-        #         return
-        #     
-        #     # TODO: Move this into a function.
+        return paths_to_execute
 
-        #     goal_pose = PoseStamped()
-        #     goal_pose.header.frame_id = 'map'
-        #     goal_pose.pose.position.x = goal_transform.transform.translation.x
-        #     goal_pose.pose.position.y = goal_transform.transform.translation.y
-        #     goal_pose.pose.position.z = goal_transform.transform.translation.z
-        #     goal_pose.pose.orientation.x = goal_transform.transform.rotation.x
-        #     goal_pose.pose.orientation.y = goal_transform.transform.rotation.y
-        #     goal_pose.pose.orientation.z = goal_transform.transform.rotation.z
-        #     goal_pose.pose.orientation.w = goal_transform.transform.rotation.w
-        #
-        #     
-        #     if self._goal_future is None:
-        #         self.send_goal(task_agent.id, task_goal.id, goal_pose)
-        #         return
-        # 
-        #     self.get_logger().info(f'{self._goal_future.result()=}')
-        #
-        #     # self.get_logger().info(f'Sent goal {task_goal.id} to agent {task_agent.id}')
+# ----------------------------------------------------------------------------
+
+class MissionState:
+    def __init__(self, node) -> None:
+        self.node: MissionNode = node
+
+    def on_enter(self):
+        pass
+
+    def on_exit(self):
+        pass
+
+    def execute(self):
+        pass
+
+class IdleState(MissionState):
+    def execute(self):
+        self.node.get_logger().info('Idle: Waiting for tasks...')
+        
+        if self.node._tasks:
+            self.node.transition_to(TaskSelectionState(self.node))
+
+class TaskSelectionState(MissionState):
+    def execute(self):
+        self.node.get_logger().info('TaskSelection: Selecting a task')
+
+        if self.node._tasks:
+            self.node._current_task = self.node._tasks.pop(0)
+            self.node.transition_to(ComputeGoalsState(self.node))
+        else:
+            self.node.transition_to(IdleState(self.node))
+
+# FIX: When there are less than 3 goals, assign multiple. Currently only
+# assigns the closest single robot.
+class ComputeGoalsState(MissionState):
+    def execute(self):
+        self.node.get_logger().info(f'ComputeGoals: Computing goals for task {self.node._current_task}')
+
+        if self.node._current_task is None:
+            self.node.get_logger().error('No current task selected. Going back to Idle state...')
+            self.node.transition_to(IdleState)
+            return
+
+        all_paths = []
+        if len(self.node._current_task.goal) < 3:
+            all_paths = [[int(goal) for goal in self.node._current_task.goal]]
+        else: 
+            tsp, thing_association = self.node.create_tsp(self.node._current_task)
+            solution = lkh.solve(problem=tsp)
+
+            # convert nodes into goal index
+            for node_path in solution:
+                all_paths.append([thing_association[node] for node in node_path])
+
+        # assign paths based on how close agents are to the first node in a path
+        assigned_node_paths = self.node.assign_paths(all_paths)
+        self.node.get_logger().info(f'Nodes to execute: {assigned_node_paths}')
+
+        # convert goals to poses
+        self.node._paths_to_execute = {}
+        for agent, goals in assigned_node_paths.items():
+            self.node._paths_to_execute[agent] = [self.node._goals[str(i)].pose for i in goals]
+
+        self.node.get_logger().info(f'Assigned Pose List: {self.node._paths_to_execute}')
+
+        self.node.transition_to(ExecuteTaskState(self.node))
+   
+class ExecuteTaskState(MissionState):
+    def execute(self):
+        self.node.get_logger().info(f'TaskCompleted: Completing task {self.node._current_task}')
+
+
+        self.node.get_logger().info(f'Task has {self.node._paths_to_execute}')
+        for agent, path in self.node._paths_to_execute.items():
+            self.node.send_goals(agent_id=agent, goals=path)
+
+        self.node._current_task = None
+
+        self.node.transition_to(TaskSelectionState(self.node))
 
 # ----------------------------------------------------------------------------
 
 def main(args=None) -> None:
-    rclpy.init()
+    rclpy.init(args=args)
 
     node = MissionNode()
     

@@ -2,77 +2,120 @@ import math
 
 import rclpy
 from rclpy.node import Node
+from rclpy.action.client import ActionClient, Future
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
-from tf2_ros import ActionClient, PoseStamped
 
-from nav2_msgs.action import ComputePathToPose, NavigateToPose
+from std_msgs.msg import Bool
+from geometry_msgs.msg import Pose, PoseStamped, PoseWithCovarianceStamped
 
-from nav_msgs.msg import Path
+from nav2_msgs.action import NavigateToPose
 
 from std_srvs.srv import SetBool
-from warehouse_tasker_interfaces.srv import AgentState, Register, SendGoal, SendPathDist
-
-from enum import Enum
-
-class State(Enum):
-    STANDBY:    int = 1
-    COMP_PATH:  int = 2
-    ACTIVE:     int = 3
-    ARRIVED:    int = 4
-    RETURNING:  int = 5
+from warehouse_tasker_interfaces.srv import Register, SendPose
 
 class AgentNode(Node):
     def __init__(self) -> None:
-        super().__init__('agent_node')
+        super().__init__(node_name='agent_node')
 
         # ROS Parameters
         self.declare_parameter('use_mission', True)
 
         # Object Variables
-        self._initial_pose: PoseStamped | None  = None
-        self._current_goal: PoseStamped | None  = None
-        self._current_goal_id: str | None       = None
-        self._agent_state: int                  = State.STANDBY
+        self.current_state: AgentState          = IdleState(self)
 
-        self._path_accepted: bool | None        = None
+        self._initial_pose: PoseWithCovarianceStamped | None  = None
+        self._current_pose: PoseWithCovarianceStamped | None  = None
+        self._stored_goals: list[Pose]          = []
+        self._current_goal: Pose | None         = None
+
+        # Topic Publishers
+        self._state_publisher                   = self.create_publisher(Bool, 'agent_state', qos_profile=10)
+
+        # Topic Subscribers
+        self._initial_pose_subscriber           = self.create_subscription(PoseWithCovarianceStamped, 'initialpose', self.initial_pose_callback, qos_profile=5)
+
+        # Services
+        self._goal_service                      = self.create_service(SendPose, 'send_goal', self.send_goal_callback)
+
+        # Service Clients
+        self._registration_client               = self.create_client(Register, '/register_agent')
+        self._door_client                       = self.create_client(SetBool, '/open_door')
 
         # Action Clients
-        self._compute_action_client             = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
-        self._computed_path: Path | None        = None
-
         self._nav_action_client                 = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self._nav_is_complete: bool             = False
 
-        # Services
-        self._goal_service                      = self.create_service(SendGoal, 'send_goal', self.send_goal_callback)
-        self._nav_service                       = self.create_service(SetBool, 'start_nav', self.start_nav_callback)
+        # Register agent to mission
+        self._namespace                         = self.get_namespace() if not self.get_namespace() == '/' else ''
 
-        # Service Clients
-        self._registration_client   = self.create_client(Register, '/register_agent')
-        self._door_client           = self.create_client(SetBool, '/open_door')
-        self._path_distance_client  = self.create_client(SendPathDist, '/send_path_dist')
-
-        # Register agent to mission on initialisation
-        self._namespace             = self.get_namespace() if not self.get_namespace() == '/' else ''
         if self.get_parameter('use_mission').value:
             self.register_agent(self._namespace)
 
         # Start main loop
-        self.create_timer(1.0, self.main_loop)
+        self.create_timer(1.0, self.run)
         self._callback_group = ReentrantCallbackGroup()
+
+# -------------------------------------------------------------------------------------------
+
+    def transition_to(self, new_state) -> None:
+        """Transitions the current state of the Mission node.
+    
+        Arguments:
+            new_state - The new state to transition into
+
+        Returns:
+            None
+        """
+        self.current_state.on_exit()
+        self.current_state = new_state
+        self.current_state.on_enter()
+ 
+    def run(self) -> None:
+        """Begins state machine execution"""
+        self.current_state.execute()
+
+    def calculate_distance_between_poses(self, pose_one: PoseStamped, pose_two: PoseStamped) -> float:
+        """Calculates the distance between two poses.
+
+        Arguments:
+            pose_one - first pose
+            pose_two - second pose
+
+        Returns:
+            The distance as a float between pose_one and pose_two
+        """
+        return math.sqrt((pose_two.pose.position.x - pose_one.pose.position.x) ** 2 +
+                         (pose_two.pose.position.y - pose_one.pose.position.y) ** 2)
+
+# -------------------------------------------------------------------------------------------
+
+    # NOTE: TOPIC CALLBACK FUNCTIONS
+
+    # FIX: Currently doesn't receive anything unless started before turtlebots are launched
+    # and until a 2D pose estimate is given.
+    def initial_pose_callback(self, msg: PoseWithCovarianceStamped) -> None:
+        """Callback function for receiving an initial pose."""
+        self._initial_pose = msg
+        self.get_logger().info('Receieved new intial pose!')
 
 # -------------------------------------------------------------------------------------------
 
     # NOTE: SERVICE CLIENT CALL FUNCTIONS
 
-        # NOTE: spin_until_future_complete() works here only
-        # because it is not called within a callback function!
-
     def register_agent(self, namespace):
+        """Registers agent to mission control with a namespace"""
+        attempts = 0
+        MAX_ATTEMPTS = 10
+
         self.get_logger().warn(f'Waiting for {self._registration_client.srv_name}...')
         while not self._registration_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn(f'{self._registration_client.srv_name} service not available, waiting again...')
+            if attempts >= MAX_ATTEMPTS:
+                self.get_logger().error('Failed to register agent to mission node! Running without mission...')
+                return
+
+            self.get_logger().warn(f'{self._registration_client.srv_name} service not available, attempting another {MAX_ATTEMPTS - attempts} time(s)...')
+            attempts += 1
 
         req = Register.Request()
         req.id = namespace
@@ -82,9 +125,8 @@ class AgentNode(Node):
         rclpy.spin_until_future_complete(self, future) 
         return future.result()
 
-    # FIX: PLEASE CHECK IF THESE ARE ALLOWED TO SPIN UNTIL FUTURE COMPLETE, AS THESE ARE RUN IN MAIN LOOP!
-
-    def open_door(self):
+    def activate_payload_mechanism(self):
+        """Service call to activate payload_system"""
         self.get_logger().warn(f'Waiting for {self._door_client.srv_name}...')
         while not self._door_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn(f'{self._door_client.srv_name} service not available, waiting again...')
@@ -97,46 +139,21 @@ class AgentNode(Node):
         rclpy.spin_until_future_complete(self, future)
         return future.result()
 
-    def send_path_dist(self, distance: float, goal_id: str):
-        self.get_logger().warn(f'Waiting for {self._path_distance_client.srv_name}...')
-        while not self._path_distance_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn(f'{self._path_distance_client.srv_name} service not available, waiting again...')
-
-        # TODO: Change request to correct name of 'path_dist'
-        req = SendPathDist.Request()
-        req.path_length = distance
-        req.goal_id     = goal_id
-
-        # FIX: CHECK IF THIS SPINS CORRECTLY!!!
-        future = self._path_distance_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-        return future.result()
-
 # -------------------------------------------------------------------------------------------
 
     # NOTE: SERVICE CALLBACKS
 
-    def send_goal_callback(self, request: SendGoal.Request, response: SendGoal.Response):
-        if request.goal_pose is None:
+    def send_goal_callback(self, request: SendPose.Request, response: SendPose.Response):
+        if request.pose is None:
             self.get_logger().error('No goal pose was set in request! Ignoring goal...')
             response.success = False
             return response
 
-        if request.goal_id is None:
-            self.get_logger().error('No goal ID given in request! Ignoring goal...')
-            response.success = False
-            return response
+        # HACK: Check if this actually concatenates the lists
+        self._stored_goals += request.pose
 
-        self._current_goal      = request.goal_pose
-        self._current_goal_id   = request.goal_id
+        self.get_logger().info(f'Received {len(request.pose)} goal')
 
-        self.get_logger().info(f'Received goal locations - x: {request.goal_pose.pose.position.x}, y: {request.goal_pose.pose.position.y}')
-
-        response.success = True
-        return response
-
-    def start_nav_callback(self, request: SetBool.Request, response: SetBool.Response):
-        self._path_accepted = request.data
         response.success = True
         return response
 
@@ -144,52 +161,10 @@ class AgentNode(Node):
 
     # NOTE: ACTION CLIENT
 
-    def start_compute_goal_action(self, goal: PoseStamped):
-        goal_msg = ComputePathToPose.Goal()
-        goal_msg.goal = goal
-
-        self.get_logger().info(f'Waiting for {self._compute_action_client._action_name} action server to be ready...')
-        while not self._nav_action_client.wait_for_server(timeout_sec=1.0):
-            self.get_logger().warn(f'{self._compute_action_client._action_name} action server is not available. Waiting...')
-
-        self._send_compute_goal_handle = self._compute_action_client.send_goal_async(
-            goal_msg, feedback_callback=self.compute_feedback_callback
-        )
-        self._send_compute_goal_handle.add_done_callback(self.compute_goal_response_callback)
-
-    def compute_goal_response_callback(self, future):
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().info('Goal rejected :(')
-            return
-
-        self.get_logger().info('Goal accepted :)')
-        self._get_compute_result_future = goal_handle.get_result_async()
-        self._get_compute_result_future.add_done_callback(self.get_compute_result_callback)
-
-    def get_compute_result_callback(self, future):
-        result: ComputePathToPose.Result = future.result().result
-        if result:
-            self.get_logger().info(f'Resulting path poses: {len(result.path.poses)}')
-            self._computed_path = result.path
-        else:
-            self.get_logger().warn(f'Result: is None!')
-            self._computed_path = None
-
-    def compute_feedback_callback(self, feedback_msg) -> None:
-        feedback = feedback_msg.feedback
-        self.get_logger().info(f'Feedback: {feedback}')
-
-# -------------------------------------------------------------------------------------------
-
-    # NOTE: ACTION CLIENT
-
-    def start_nav_goal_action(self, goal: PoseStamped) -> None:
+    def start_nav_goal_action(self, goal: Pose) -> None:
         goal_msg = NavigateToPose.Goal()
-        goal_msg.pose = goal
-
-        # NOTE: Reset goal here!
-        self._current_goal = None
+        goal_msg.pose.header.frame_id = 'map'
+        goal_msg.pose.pose = goal
 
         self.get_logger().info(f'Waiting for {self._nav_action_client._action_name} action server to be ready...')
         while not self._nav_action_client.wait_for_server(timeout_sec=1.0):
@@ -198,143 +173,102 @@ class AgentNode(Node):
         self._nav_goal_handle = self._nav_action_client.send_goal_async(
             goal_msg, feedback_callback=self.nav_feedback_callback
         )
+        self._nav_goal_handle.add_done_callback(self.nav_goal_response_callback)
 
     def nav_goal_response_callback(self, future) -> None:
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().info('Goal rejected :(')
+            self.get_logger().error('Goal rejected :(')
             return
 
-        self.get_logger().info('Goal accepted :)')
+        self.get_logger().error('Goal accepted :)')
         self._nav_result_future = goal_handle.get_result_async()
         self._nav_result_future.add_done_callback(self.get_nav_result_callback)
 
     def get_nav_result_callback(self, future) -> None:
         result = future.result().result
-        self.get_logger().info(f'Result: {result}')
-        self.nav_is_complete = True
+        self.get_logger().error(f'Navigation Complete!')
+        self._nav_is_complete = True
 
     def nav_feedback_callback(self, feedback_msg) -> None:
         feedback = feedback_msg.feedback
         self.get_logger().info(f'Distance remaining: {feedback.distance_remaining}')
 
 # -------------------------------------------------------------------------------------------
+        
+class AgentState:
+    def __init__(self, node) -> None:
+        self.node: AgentNode = node
 
-    # NOTE: HELPER FUNCTIONS
+    def on_enter(self):
+        pass
 
-    def calculate_distance_between_poses(self, pose_one: PoseStamped, pose_two: PoseStamped) -> float:
-        """Calculates the distance between two poses."""
-        return math.sqrt((pose_two.pose.position.x - pose_one.pose.position.x) ** 2 +
-                         (pose_two.pose.position.y - pose_one.pose.position.y) ** 2)
+    def on_exit(self):
+        pass
 
-    def calculate_path_distance(self, path: Path) -> float:
-        """Calculates the distance of a path."""
-        path_distance: float = 0.0
-        for i, pose in enumerate(path.poses):
-            prev_pose = path.poses[i-1]
-            curr_pose = pose
-            path_segment_distance = self.calculate_distance_between_poses(curr_pose, prev_pose)
-            path_distance += path_segment_distance
+    def execute(self):
+        pass
 
-        return path_distance
+class IdleState(AgentState):
+    def execute(self):
+        self.node._state_publisher.publish(Bool(data=False))
 
-    def reset_state(self) -> None:
-        self._agent_state       = State.STANDBY
-        self._current_goal      = None
-        self._current_goal_id   = None
-        self._path_accepted     = False
-        self._nav_is_complete   = False
+        if self.node._stored_goals is None or len(self.node._stored_goals) <= 0:
+            self.node.get_logger().warn(f'Idle: No goals received, awaiting new goal...')
+            return
+
+        if self.node._current_goal is not None:
+            self.node.get_logger().warn(f'Idle: Goal already set, transitioning to ActiveState...')
+            self.node.transition_to(ActiveState(self.node))
+            return
+
+        self.node._current_goal = self.node._stored_goals[0]
+        self.node._stored_goals.pop(0)
+        self.node.get_logger().info(f'Idle: Setting goal {self.node._current_goal.position} as current, transitioning to ActiveState...')
+
+        self.node.transition_to(ActiveState(self.node))
+
+class ActiveState(AgentState):
+    def on_enter(self):
+        if self.node._current_goal is None:
+            self.node.get_logger().warn(f'Active: No goal set, transitioning to IdleState...')
+            self.node.transition_to(IdleState(self.node))
+            return
+
+        self.node._nav_is_complete = False
+        self.node.start_nav_goal_action(self.node._current_goal)
+        self.node._current_goal = None
+
+    def execute(self):
+        self.node._state_publisher.publish(Bool(data=True))
+
+        self.node.get_logger().info(f'{self.node._nav_is_complete=}')
+
+        if not self.node._nav_is_complete:
+            self.node.get_logger().info('Execute: Waiting for navigation to complete...')
+            return
+
+        if len(self.node._stored_goals) > 0:
+            self.node.get_logger().info('Execute: More goals to complete...')
+            self.node.transition_to(IdleState(self.node))
+            return
+
+        # HACK: To make this work, for now, the agent only accepts new tasks, after
+        # the current one is completely finished. Would be nice to expand this so that
+        # the mission node can calculate new optimal goals on the fly, but not right
+        # now.
+
+        self.node.transition_to(ReturnState(self.node))
+
+class ReturnState(AgentState):
+    def execute(self):
+        self.node._state_publisher.publish(Bool(data=False))
+
+        # FIX: Doesn't do anything at the moment...
+
+        self.node.transition_to(IdleState(self.node))
 
 # -------------------------------------------------------------------------------------------
-
-    def main_loop(self) -> None:
-        # self.get_logger().info(f'Current agent state is set to {self._agent_state}')
-
-        if self._current_goal is None:
-            self.get_logger().warn(f'No goal set, awaiting new goal...')
-            return
-        
-        if self._current_goal_id is None:
-            self.get_logger().warn(f'No goal ID set, check goal is set correctly. Standing by...')
-            return
-
-        # TODO: Test states correctly transition...
-        match self._agent_state:
-            case State.STANDBY:
-                self.get_logger().info(f'Computing path to goal...')
-                self.start_compute_goal_action(self._current_goal)
-                
-                self._agent_state = State.COMP_PATH
-                self.get_logger().info('Computing path. Changing state from STANDBY to COMP_PATH!')
-
-            case State.COMP_PATH:
-                if self._computed_path is None:
-                    self.get_logger().warn('Computed path is None! Trying Again...')
-                    return
-
-                self.get_logger().info(f'Sending path distance to mission...')
-                path_dist: float = self.calculate_path_distance(self._computed_path)
-                ok = self.send_path_dist(path_dist, self._current_goal_id)
-
-                # HACK: DELETE ONCE TESTED
-                print(f'YAY resulting data from sending path distance: {ok}')
-
-                if not ok:
-                    self.get_logger().error('Failed to send path distance to mission node! Trying again...')
-                    return
-
-                if self._path_accepted is None:
-                    self.get_logger().info('Waiting for response from Mission node...')
-                    return
-
-                if not self._path_accepted:
-                    self.get_logger().info('Mission node rejected path. Resetting state to STANDBY...')
-                    self.reset_state()
-                    return
-                
-                self._agent_state = State.ACTIVE
-                self.get_logger().info('Mission node accepted path. Changing state from COMP_PATH to ACTIVE!')
-                
-            case State.ACTIVE:
-                if self._current_goal is None:
-                    self._agent_state = State.STANDBY
-                    self.get_logger().warn(f'No goal set, going back to STANDBY state...')
-                    return
-
-                self.start_nav_goal_action(self._current_goal)
-
-                # HACK: May be a point of bugs... need to test.
-                if  self._nav_is_complete:
-                    self._agent_state = State.ARRIVED
-                    self.get_logger().info('Changing state from ACTIVE to ARRIVED!')
-            
-            case State.ARRIVED:
-                self.get_logger().info(f'Opening door...')
-                ok = self.open_door()
-
-                if not ok:
-                    self.get_logger().error('Failed to open door! Trying again...')
-                    return
-
-                self._agent_state = State.ACTIVE
-                self.get_logger().info('Changing state from ARRIVED to RETURNING!')
-
-            case State.RETURNING:
-                if self._initial_pose is None:
-                    self.get_logger().error(f'No initial pose set, unable to return home...')
-                    return
-
-                if self._agent_state is None:
-                    self._agent_state = State.STANDBY
-                    self.get_logger().warn(f'No goal set, going back to STANDBY state...')
-                    return
-
-                self.start_nav_goal_action(self._initial_pose)
-
-                # HACK: May be a point of bugs... need to test.
-                if self._nav_action_client:
-                    self._agent_state = State.STANDBY
-                    self.get_logger().info('Changing state from RETURNING to STANDBY!')
 
 def main(args=None) -> None:
     rclpy.init(args=args)
