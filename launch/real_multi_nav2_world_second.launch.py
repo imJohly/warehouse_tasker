@@ -27,12 +27,14 @@ from launch.event_handlers import OnProcessExit
 from launch.conditions import IfCondition
 import launch.logging
 
+from nav2_common.launch import RewrittenYaml
+
 def generate_launch_description():
     ld = LaunchDescription()
 
     # Names and poses of the robots
     robots = [
-         {'name': 'tb1', 'x_pose': '-1.5', 'y_pose': '-0.5', 'z_pose': 0.01},
+         {'name': 'tb2', 'x_pose': '-1.5', 'y_pose': '-0.5', 'z_pose': 0.01},
         #{'name': 'tb2', 'x_pose': '-1.5', 'y_pose': '0.5', 'z_pose': 0.01},
     ]
 
@@ -86,6 +88,8 @@ def generate_launch_description():
  
     remappings = [('/tf', 'tf'),
                   ('/tf_static', 'tf_static')]
+               
+        
     map_server=Node(package='nav2_map_server',
         executable='map_server',
         name='map_server',
@@ -93,7 +97,7 @@ def generate_launch_description():
         parameters=[{'yaml_filename': os.path.join(get_package_share_directory('warehouse_tasker'), 'map', 'no_obstacles.yaml'),
                      },],
         remappings=remappings)
-
+    
     map_server_lifecyle=Node(package='nav2_lifecycle_manager',
             executable='lifecycle_manager',
             name='lifecycle_manager_map_server',
@@ -101,7 +105,6 @@ def generate_launch_description():
             parameters=[{'use_sim_time': use_sim_time},
                         {'autostart': True},
                         {'node_names': ['map_server']}])
-
 
     ld.add_action(map_server)
     ld.add_action(map_server_lifecyle)
