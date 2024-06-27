@@ -1,43 +1,23 @@
 positions:
   0:
-    translation: [0, 0, 0.068]
+    translation: [2.4759, 0.224641, -0.00220394]
   1:
-    translation: [-3.45, 3.7, 0.068]
+    translation: [2.86127, 0.273326, 0.00343513]
   2:
-    translation: [-3.03, 3.7, 0.068]
+    translation: [4.28729, 0.924868, 0.00245762]
   3:
-    translation: [-1.52, 3.87, 0.068]
+    translation: [4.77874, 2.30697, 0.00264454]
   4:
-    translation: [-1.04, 3.85, 0.068]
+    translation: [4.28164, 2.26841, 0.00307083]
   5:
-    translation: [0.519, 3.82, 0.068]
+    translation: [0.402174, 1.95329, 0.000427246]
   6:
-    translation: [1.02, 3.81, 0.068]
+    translation: [2.80154, 3.39433, -0.00106049]
   7:
-    translation: [1.05, 3.29, 0.068]
+    translation: [2.40096, 3.34084, -0.000727654]
   8:
-    translation: [0.548, 3.34, 0.068]
+    translation: [2.41646, 3.50886, -0.000665665]
   9:
-    translation: [-1.04, 3.35, 0.068]
+    translation: [2.72415, 3.60969, -0.000893593]
   10:
-    translation: [-1.53, 3.36, 0.068]
-  11:
-    translation: [-2.95, 3.33, 0.068]
-  12:
-    translation: [-3.45, 3.33, 0.068]
-  13:
-    translation: [1.09, 1.77, 0.068]
-  14:
-    translation: [0.548, 1.75, 0.068]
-  15:
-    translation: [-0.977, 1.77, 0.068]
-  16:
-    translation: [-1.49, 1.75, 0.068]
-  17:
-    translation: [-2.86, 1.75, 0.068]
-  18:
-    translation: [-3.45, 1.75, 0.068]
-  19:
-    translation: [0.548, 1.3, 0.068]
-  20:
-    translation: [1.12, 1.29, 0.068]
+    translation: [2.84728, 4.84096, -0.000447273]

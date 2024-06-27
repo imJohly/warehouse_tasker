@@ -41,7 +41,7 @@ class AgentNode(Node):
 
         # Service Clients
         self._registration_client               = self.create_client(Register, '/register_agent')
-        self._door_client                       = self.create_client(SetBool, '/open_door')
+        self._door_client                       = self.create_client(SetBool, 'open_door')
 
         # Action Clients
         self._nav_action_client                 = ActionClient(self, NavigateToPose, 'navigate_to_pose')
