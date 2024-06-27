@@ -11,6 +11,7 @@ from rclpy.node import Node, Subscription
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import Client, MultiThreadedExecutor
 
+from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformListener
 from geometry_msgs.msg import Pose, PoseWithCovarianceStamped, TransformStamped
 
@@ -48,11 +49,11 @@ class MissionNode(Node):
         # Subscribers
         # HACK: Might even be able to delete this as there is no real need to store the subscribers
         self._agent_pose_subscribers: list[Subscription] = []
+        self._agent_state_subscribers: list[Subscription] = []
 
         # Services
         self._registration_service              = self.create_service(Register, 'register_agent', self.registration_callback)
         self._task_service                      = self.create_service(SendTask, 'send_task', self.task_callback)
-        self._done_service                      = self.create_service(Register, 'agent_done', self.done_callback)
 
         # Service Clients
         self._agent_goal_clients: dict[str, Client] = {}
@@ -144,6 +145,10 @@ class MissionNode(Node):
         self.get_logger().info(f'Got new pose [x: {msg.pose.pose.position.x}, y: {msg.pose.pose.position.y}] from {agent}')
         self._agents[agent].pose = msg.pose.pose
 
+    def agent_state_callback(self, msg: Bool, agent: str) -> None:
+        self.get_logger().info(f'Got new state, {msg.data} of agent {agent}')
+        self._agents[agent].occupied = msg.data
+
 # ----------------------------------------------------------------------------
 
     # NOTE: SERVICE CALLBACKS
@@ -156,14 +161,24 @@ class MissionNode(Node):
             self._agent_goal_clients[f'{request.id}'] = new_goal_client
 
             # Create a subscriber
-            topic = f'{request.id}/amcl_pose'
+            pose_topic = f'{request.id}/amcl_pose'
             self._agent_pose_subscribers.append(self.create_subscription(
                 msg_type=PoseWithCovarianceStamped,
-                topic=topic,
+                topic=pose_topic,
                 callback=lambda msg, agent=f'{request.id}': self.agent_pose_callback(msg, agent),
                 qos_profile=10
             ))
-            self.get_logger().info(f'Subscribed to {topic}')
+            self.get_logger().info(f'Subscribed to {pose_topic}')
+
+            # Create a subscriber
+            state_topic = f'{request.id}/agent_state'
+            self._agent_pose_subscribers.append(self.create_subscription(
+                msg_type=Bool,
+                topic=state_topic,
+                callback=lambda msg, agent=f'{request.id}': self.agent_state_callback(msg, agent),
+                qos_profile=10
+            ))
+            self.get_logger().info(f'Subscribed to {state_topic}')
 
             new_agent = Thing(id=request.id, pose=Pose())
             self._agents[request.id] = new_agent
@@ -186,18 +201,6 @@ class MissionNode(Node):
             agent_id=request.agent,
             goal=request.goal
         ))
-
-        response.success = True
-        return response
-
-    def done_callback(self, request: Register.Request, response: Register.Response):
-        if request.id == '':
-            self.get_logger().error('No agent ID received, ignoring service call...')
-            response.success = False
-            return
-
-        self._agents[request.id].occupied = False
-        self.get_logger().error(f'Successfully recieved agent ID {request.id}, agent is now not occupied!')
 
         response.success = True
         return response

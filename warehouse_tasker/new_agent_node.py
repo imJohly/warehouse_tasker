@@ -6,6 +6,7 @@ from rclpy.action.client import ActionClient, Future
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 
+from std_msgs.msg import Bool
 from geometry_msgs.msg import Pose, PoseStamped, PoseWithCovarianceStamped
 
 from nav2_msgs.action import NavigateToPose
@@ -28,7 +29,10 @@ class AgentNode(Node):
         self._stored_goals: list[Pose]          = []
         self._current_goal: Pose | None         = None
 
-        # Subscribers
+        # Topic Publishers
+        self._state_publisher                   = self.create_publisher(Bool, 'agent_state', qos_profile=10)
+
+        # Topic Subscribers
         self._initial_pose_subscriber           = self.create_subscription(PoseWithCovarianceStamped, 'initialpose', self.initial_pose_callback, qos_profile=5)
 
         # Services
@@ -37,9 +41,6 @@ class AgentNode(Node):
         # Service Clients
         self._registration_client               = self.create_client(Register, '/register_agent')
         self._door_client                       = self.create_client(SetBool, '/open_door')
-
-        self._done_client                       = self.create_client(Register, '/agent_done')
-        self._agent_done_future                 = Future()
 
         # Action Clients
         self._nav_action_client                 = ActionClient(self, NavigateToPose, 'navigate_to_pose')
@@ -138,18 +139,6 @@ class AgentNode(Node):
         rclpy.spin_until_future_complete(self, future)
         return future.result()
 
-    def call_done_service(self):
-        self.get_logger().warn(f'Waiting for {self._done_client.srv_name}...')
-        while not self._done_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn(f'{self._done_client.srv_name} service not available, waiting again...')
-
-        req = Register.Request()
-        req.id = self._namespace
-
-        self._agent_done_future = self._done_client.call_async(req)
-        # rclpy.spin_until_future_complete(self, future)
-        # return future.result()
-
 # -------------------------------------------------------------------------------------------
 
     # NOTE: SERVICE CALLBACKS
@@ -222,6 +211,8 @@ class AgentState:
 
 class IdleState(AgentState):
     def execute(self):
+        self.node._state_publisher.publish(Bool(data=False))
+
         if self.node._stored_goals is None or len(self.node._stored_goals) <= 0:
             self.node.get_logger().warn(f'Idle: No goals received, awaiting new goal...')
             return
@@ -249,6 +240,8 @@ class ActiveState(AgentState):
         self.node._current_goal = None
 
     def execute(self):
+        self.node._state_publisher.publish(Bool(data=True))
+
         self.node.get_logger().info(f'{self.node._nav_is_complete=}')
 
         if not self.node._nav_is_complete:
@@ -264,21 +257,12 @@ class ActiveState(AgentState):
         # the current one is completely finished. Would be nice to expand this so that
         # the mission node can calculate new optimal goals on the fly, but not right
         # now.
-        self.node.call_done_service()
-        self.node.get_logger().warn(f'Execute: {self.node._agent_done_future.result()}')
-    
-        if self.node._agent_done_future is None:
-            self.node.get_logger().warn('Execute: Waiting for future to be done...')
-            return
-
-        if not self.node._agent_done_future.result():
-            self.node.get_logger().warn('Execute: Waiting for response from Mission Control...')
-            return
 
         self.node.transition_to(ReturnState(self.node))
 
 class ReturnState(AgentState):
     def execute(self):
+        self.node._state_publisher.publish(Bool(data=False))
 
         # FIX: Doesn't do anything at the moment...
 
