@@ -28,12 +28,24 @@ The [turtlebot3_multi_robot](https://github.com/arshadlab/turtlebot3_multi_robot
 
 The following is for humble, but should work for foxy (just replace humble).
 
+First build and install LKH-3 and the python wrapper PyLKH with following commands,
+
+```bash
+cd
+wget http://akira.ruc.dk/~keld/research/LKH-3/LKH-3.0.10.tgz
+tar xvfz LKH-3.0.10.tgz
+cd LKH-3.0.10
+make
+sudo cp LKH /usr/local/bin
+```
+
 ```bash
 sudo apt install ros-humble-aruco-opencv
 
 cd ~/<your ros2_ws here>/src
 git clone -b master https://github.com/arshadlab/turtlebot3_multi_robot.git
 ```
+
 Install any dependencies for these packages with the following,
 
 ```bash
@@ -71,6 +83,36 @@ source install/local_setup.bash
 
 It should have built successfully, but lets test it.
 
+## Launching on real robots,
+
+To launch all components for real robots,
+
+```bash
+ros2 launch warehouse_tasker real_multi_nav2_world.launch.py
+```
+
+```bash
+ros2 launch warehouse_tasker real_marker_broadcaster.launch.py
+```
+
+Launch mission with the number of goals present
+```bash
+ros2 launch warehouse_tasker mission.launch.py goal_count:=20
+```
+
+```bash
+ros2 run warehouse_tasker agent_node --ros-args -r __ns:=/tb1 -p use_door:=True
+```
+
+```bash
+ros2 run warehouse_tasker agent_node --ros-args -r __ns:=/tb2 -p use_door:=True
+```
+
+Then to send goals,
+```bash
+ros2 service call /send_task warehouse_tasker_interfaces/srv/SendTask "{agent: '', goal: ['3', '5', '4', '7', '6']}"
+```
+
 ## Launching the test environment
 
 To launch the test environment,
@@ -82,9 +124,10 @@ ros2 launch warehouse_tasker world.launch.py
 For multi robots,
 
 ```bash
-ros2 launch warehouse_tasker world_triple_robot.launch.py
+ros2 launch warehouse_tasker world_smaller_dual_namespace.launch.py
 ```
-To launch RVIZ inidividually for each robot
+
+To launch RVIZ inidividually for each robot,
 
 ```bash
 rviz2 -d /home/callum/catkin_ws/src/turtlebot3_multi_robot/rviz/multi_nav2_default_view.rviz --ros-args -r __node:=rviz2 -r __ns:=/tb1 -r /tf:=tf -r /tf_static:=tf_static -r /goal_pose:=goal_pose -r /clicked_point:=clicked_point -r /initialpose:=initialpose

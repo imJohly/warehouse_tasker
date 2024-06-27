@@ -20,6 +20,7 @@ class AgentNode(Node):
 
         # ROS Parameters
         self.declare_parameter('use_mission', True)
+        self.declare_parameter('use_door', False)
 
         # Object Variables
         self.current_state: AgentState          = IdleState(self)
@@ -242,30 +243,44 @@ class ActiveState(AgentState):
     def execute(self):
         self.node._state_publisher.publish(Bool(data=True))
 
-        self.node.get_logger().info(f'{self.node._nav_is_complete=}')
-
         if not self.node._nav_is_complete:
             self.node.get_logger().info('Execute: Waiting for navigation to complete...')
             return
+
+        # NOTE: only uses door when parameter set, default doesn't activate.
+        if self.node.get_parameter('use_door').value:
+            self.node.activate_payload_mechanism()
 
         if len(self.node._stored_goals) > 0:
             self.node.get_logger().info('Execute: More goals to complete...')
             self.node.transition_to(IdleState(self.node))
             return
 
-        # HACK: To make this work, for now, the agent only accepts new tasks, after
-        # the current one is completely finished. Would be nice to expand this so that
-        # the mission node can calculate new optimal goals on the fly, but not right
-        # now.
-
         self.node.transition_to(ReturnState(self.node))
 
 class ReturnState(AgentState):
+    def on_enter(self):
+        if self.node._initial_pose is None:
+            self.node.get_logger().info('Return: No initial pose set, not sending return command...')
+            return
+
+        initial_pose = Pose()
+        initial_pose.position = self.node._initial_pose.pose.pose.position
+        initial_pose.orientation = self.node._initial_pose.pose.pose.orientation
+
+        self.node._current_goal = initial_pose
+
+        self.node._nav_is_complete = False
+        self.node.start_nav_goal_action(self.node._current_goal)
+        self.node._current_goal = None
+
     def execute(self):
         self.node._state_publisher.publish(Bool(data=False))
 
-        # FIX: Doesn't do anything at the moment...
+        if not self.node._nav_is_complete:
+            self.node.get_logger().info('Return: Waiting for return to complete...')
 
+        self.node.get_logger().info('Return: Complete, going to idle state.')
         self.node.transition_to(IdleState(self.node))
 
 # -------------------------------------------------------------------------------------------
