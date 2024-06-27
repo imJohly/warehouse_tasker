@@ -136,9 +136,9 @@ class AgentNode(Node):
         req.data = True
         self.get_logger().info(f'Requesting to open door')
 
-        future = self._door_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-        return future.result()
+        self._door_client.call_async(req)
+        # rclpy.spin_until_future_complete(self, future)
+        # return future.result()
 
 # -------------------------------------------------------------------------------------------
 
